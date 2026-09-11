@@ -31,6 +31,8 @@ pub enum PlatformError {
 }
 
 impl PlatformError {
+    // Only `unix.rs` calls this today; Task 5's Windows `relaunch_privileged` will too.
+    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn io(context: &'static str, source: std::io::Error) -> Self {
         Self::Io { context, source }
     }
@@ -40,3 +42,8 @@ impl PlatformError {
 mod unix;
 #[cfg(unix)]
 pub use unix::*;
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::*;
