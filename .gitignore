@@ -1,0 +1,17 @@
+# Assignment brief is not part of the deliverable
+*.pdf
+
+# Build outputs
+/agent-rust/target/
+/logger-child/build/
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local working documents (implementation plans); the design doc in docs/ is tracked
+/docs/superpowers/
+/.superpowers/
