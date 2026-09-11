@@ -1,0 +1,149 @@
+//! Unix implementation: root-owned `0700` directory and `0600` file, `geteuid` privilege
+//! check, no self-elevation (the user runs with `sudo`).
+
+use std::ffi::OsString;
+use std::fs::{self, DirBuilder, OpenOptions, Permissions};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+
+use super::PlatformError;
+
+/// File name of the child binary next to the agent executable.
+pub const CHILD_BINARY_NAME: &str = "logger-child";
+
+const DIR_MODE: u32 = 0o700;
+const FILE_MODE: u32 = 0o600;
+
+/// `/var/log/flamingo-agent`.
+pub fn default_log_dir() -> PathBuf {
+    PathBuf::from("/var/log/flamingo-agent")
+}
+
+/// True when the effective user is root.
+pub fn is_privileged() -> Result<bool, PlatformError> {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    Ok(unsafe { libc::geteuid() } == 0)
+}
+
+/// There is no portable way to acquire root from a running process; the caller must use sudo.
+pub fn relaunch_privileged(_args: &[OsString]) -> Result<i32, PlatformError> {
+    Err(PlatformError::Unsupported("self-elevation"))
+}
+
+/// Create the directory (and parents) with mode 0700, tighten it if it already exists,
+/// and hand it to root when running as root.
+pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
+    DirBuilder::new()
+        .recursive(true)
+        .mode(DIR_MODE)
+        .create(path)
+        .map_err(|e| PlatformError::io("creating log directory", e))?;
+    fs::set_permissions(path, Permissions::from_mode(DIR_MODE))
+        .map_err(|e| PlatformError::io("setting log directory mode", e))?;
+    chown_root_if_privileged(path)
+}
+
+/// Create the file with mode 0600 (born locked), tighten it if it already exists without
+/// touching its content, and hand it to root when running as root.
+pub fn secure_file(path: &Path) -> Result<(), PlatformError> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(FILE_MODE)
+        .open(path)
+        .map_err(|e| PlatformError::io("creating child log file", e))?;
+    fs::set_permissions(path, Permissions::from_mode(FILE_MODE))
+        .map_err(|e| PlatformError::io("setting child log mode", e))?;
+    chown_root_if_privileged(path)
+}
+
+/// Human-readable protection summary, e.g. `mode=0600 uid=0 gid=0`.
+pub fn describe_protection(path: &Path) -> Result<String, PlatformError> {
+    let meta = fs::metadata(path).map_err(|e| PlatformError::io("reading file metadata", e))?;
+    Ok(format!(
+        "mode={:04o} uid={} gid={}",
+        meta.mode() & 0o7777,
+        meta.uid(),
+        meta.gid()
+    ))
+}
+
+fn chown_root_if_privileged(path: &Path) -> Result<(), PlatformError> {
+    if is_privileged()? {
+        std::os::unix::fs::chown(path, Some(0), Some(0))
+            .map_err(|e| PlatformError::io("changing owner to root", e))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn mode(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn secure_dir_creates_with_0700() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("logs");
+        secure_dir(&dir).unwrap();
+        assert!(dir.is_dir());
+        assert_eq!(mode(&dir), 0o700);
+    }
+
+    #[test]
+    fn secure_dir_tightens_existing_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("logs");
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        secure_dir(&dir).unwrap();
+        assert_eq!(mode(&dir), 0o700);
+    }
+
+    #[test]
+    fn secure_file_creates_with_0600() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("child.log");
+        secure_file(&file).unwrap();
+        assert!(file.is_file());
+        assert_eq!(mode(&file), 0o600);
+    }
+
+    #[test]
+    fn secure_file_tightens_existing_file_and_keeps_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("child.log");
+        fs::write(&file, "keep me\n").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        secure_file(&file).unwrap();
+        assert_eq!(mode(&file), 0o600);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "keep me\n");
+    }
+
+    #[test]
+    fn describe_protection_reports_mode_and_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("child.log");
+        secure_file(&file).unwrap();
+        let description = describe_protection(&file).unwrap();
+        assert!(description.starts_with("mode=0600 uid="), "{description}");
+    }
+
+    #[test]
+    fn relaunch_is_unsupported() {
+        assert!(matches!(
+            relaunch_privileged(&[]),
+            Err(PlatformError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn default_log_dir_is_under_var_log() {
+        assert_eq!(default_log_dir(), Path::new("/var/log/flamingo-agent"));
+    }
+}
