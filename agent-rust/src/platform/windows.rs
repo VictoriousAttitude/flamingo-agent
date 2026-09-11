@@ -131,6 +131,10 @@ pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
 
 /// Create the file born-locked with `FILE_SDDL` (content untouched if it exists), then
 /// re-apply the protected DACL so a pre-existing or hand-edited file is corrected too.
+/// If the file already exists but its current DACL denies the caller `GENERIC_WRITE`
+/// (so `CreateFileW` itself fails), the DACL is still re-applied — an elevated caller
+/// typically holds `WRITE_DAC` even without data access — which is what actually
+/// corrects it; `CreateFileW`'s error is only returned when the file does not exist.
 pub fn secure_file(path: &Path) -> Result<(), PlatformError> {
     let descriptor = SecurityDescriptor::from_sddl(FILE_SDDL)?;
     let name = wide(path.as_os_str());
@@ -148,7 +152,12 @@ pub fn secure_file(path: &Path) -> Result<(), PlatformError> {
         )
     };
     if handle == INVALID_HANDLE_VALUE {
-        return Err(last_error("CreateFileW"));
+        let create_err = last_error("CreateFileW");
+        return if path.exists() {
+            apply_dacl(path, &descriptor)
+        } else {
+            Err(create_err)
+        };
     }
     // SAFETY: `handle` is valid and owned here.
     unsafe { CloseHandle(handle) };
