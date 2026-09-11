@@ -31,14 +31,12 @@ pub enum PlatformError {
 }
 
 impl PlatformError {
-    // Only `unix.rs` calls this today; Task 5's Windows `relaunch_privileged` will too.
-    // Delete this `expect` attribute once a Windows call site exists — it will then
-    // become a compile error on its own if left in place.
-    #[cfg_attr(windows, expect(dead_code))]
     pub(crate) fn io(context: &'static str, source: std::io::Error) -> Self {
         Self::Io { context, source }
     }
 }
+
+pub mod winquote;
 
 #[cfg(unix)]
 mod unix;

@@ -6,6 +6,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr;
 
+use windows_sys::Win32::Foundation::ERROR_CANCELLED;
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, GENERIC_WRITE, HANDLE,
     INVALID_HANDLE_VALUE,
@@ -19,11 +20,23 @@ use windows_sys::Win32::Security::{
     GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
 };
+use windows_sys::Win32::Security::{
+    GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
     OPEN_ALWAYS,
 };
+use windows_sys::Win32::System::Com::{
+    CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject, INFINITE,
+};
+use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
+use super::winquote::quote_command_line;
 use super::PlatformError;
 
 /// File name of the child binary next to the agent executable.
@@ -241,6 +254,90 @@ pub fn describe_protection(path: &Path) -> Result<String, PlatformError> {
     Ok(string.trim_end_matches('\0').to_string())
 }
 
+/// True when the current token is elevated (a full administrator token or SYSTEM).
+pub fn is_privileged() -> Result<bool, PlatformError> {
+    let mut token: HANDLE = ptr::null_mut();
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing; `token` is a
+    // valid out-pointer.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(last_error("OpenProcessToken"));
+    }
+    let mut info = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut returned = 0u32;
+    // SAFETY: `token` is valid; the buffer is exactly sizeof(TOKEN_ELEVATION).
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            (&mut info as *mut TOKEN_ELEVATION).cast::<c_void>(),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+    };
+    let failure = (ok == 0).then(|| last_error("GetTokenInformation"));
+    // SAFETY: `token` was opened above and is not used after this.
+    unsafe { CloseHandle(token) };
+    match failure {
+        Some(err) => Err(err),
+        None => Ok(info.TokenIsElevated != 0),
+    }
+}
+
+/// Relaunch this executable through the shell's `runas` verb (one UAC prompt), wait for the
+/// elevated instance and return its exit code. Fails with `ElevationDeclined` if the user
+/// cancels the prompt.
+pub fn relaunch_privileged(args: &[OsString]) -> Result<i32, PlatformError> {
+    let exe =
+        std::env::current_exe().map_err(|e| PlatformError::io("locating own executable", e))?;
+    let verb = wide(OsStr::new("runas"));
+    let file = wide(exe.as_os_str());
+    let parameters = wide(OsStr::new(&quote_command_line(args)));
+
+    // SAFETY: COM initialisation is recommended before ShellExecuteEx; a failure (e.g. already
+    // initialised with another model) is harmless for this call.
+    unsafe {
+        CoInitializeEx(
+            ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    };
+
+    // SAFETY: an all-zero SHELLEXECUTEINFOW is the documented "unset" state.
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = parameters.as_ptr();
+    info.nShow = SW_SHOWNORMAL;
+
+    // SAFETY: every string pointer is NUL-terminated and outlives the call.
+    if unsafe { ShellExecuteExW(&mut info) } == 0 {
+        // SAFETY: GetLastError has no preconditions.
+        return Err(match unsafe { GetLastError() } {
+            ERROR_CANCELLED => PlatformError::ElevationDeclined,
+            code => PlatformError::Os {
+                call: "ShellExecuteExW",
+                code,
+            },
+        });
+    }
+    if info.hProcess.is_null() {
+        return Err(PlatformError::Os {
+            call: "ShellExecuteExW (no process handle returned)",
+            code: 0,
+        });
+    }
+    let mut exit_code = 0u32;
+    // SAFETY: hProcess is a real handle we own because of SEE_MASK_NOCLOSEPROCESS.
+    unsafe {
+        WaitForSingleObject(info.hProcess, INFINITE);
+        GetExitCodeProcess(info.hProcess, &mut exit_code);
+        CloseHandle(info.hProcess);
+    }
+    Ok(exit_code as i32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +390,10 @@ mod tests {
     fn default_log_dir_is_under_program_data() {
         let dir = default_log_dir();
         assert!(dir.ends_with("FlamingoAgent"), "{}", dir.display());
+    }
+
+    #[test]
+    fn is_privileged_answers() {
+        let _ = is_privileged().unwrap();
     }
 }
