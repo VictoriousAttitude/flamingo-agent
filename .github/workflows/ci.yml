@@ -47,7 +47,7 @@ jobs:
       - name: Coverage (lcov)
         run: cargo llvm-cov --all-targets --lcov --output-path lcov.info
       - name: Coverage (line)
-        run: cargo llvm-cov report --summary-only --fail-under-lines 0
+        run: cargo llvm-cov report --summary-only --fail-under-lines 84
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-lcov
