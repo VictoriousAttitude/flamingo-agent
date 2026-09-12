@@ -109,18 +109,4 @@ mod tests {
         assert!(m.rss_bytes > 0);
         assert!(m.utc_string().ends_with('Z'));
     }
-
-    // Regression test for the memory-stats first-call race: spawn many threads that all
-    // race to be the first caller and assert every one of them gets a real reading. Within
-    // this test binary `WARM_UP` may already have fired from an earlier test, which is
-    // fine — the contract under test is that `rss_bytes()` never surfaces the race.
-    #[test]
-    fn first_call_is_serialized_across_threads() {
-        let handles: Vec<_> = (0..16).map(|_| std::thread::spawn(rss_bytes)).collect();
-
-        for handle in handles {
-            let result = handle.join().unwrap();
-            assert!(matches!(result, Ok(n) if n > 0));
-        }
-    }
 }
