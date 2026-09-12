@@ -77,11 +77,17 @@ function Remove-InstalledService {
 
 if ($Uninstall) {
     Write-Step "Removing $ServiceName"
+    $hadService = Test-ServiceExists
+    $hadBinaries = Test-Path $InstallDir
     Remove-InstalledService
-    if (Test-Path $InstallDir) {
+    if ($hadBinaries) {
         Remove-Item -Recurse -Force $InstallDir
     }
-    Write-Host "Removed. Logs in $LogDir were kept." -ForegroundColor Green
+    if ($hadService -or $hadBinaries) {
+        Write-Host "Removed. Logs in $LogDir were kept." -ForegroundColor Green
+    } else {
+        Write-Host "Nothing to remove." -ForegroundColor Green
+    }
     exit 0
 }
 

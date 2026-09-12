@@ -69,7 +69,7 @@ Both files live in `C:\ProgramData\FlamingoAgent\` (Linux: `/var/log/flamingo-ag
 start-up:
 
 ```
-2026-09-11T20:35:00.101Z  INFO flamingo-agent starting mode="service" protection="D:PAI(A;;FA;;;BA)(A;;FA;;;SY)" ...
+2026-09-11T20:35:00.101Z  INFO flamingo-agent starting mode="service" protection=D:PAI(A;;FA;;;BA)(A;;FA;;;SY) ...
 2026-09-11T20:35:00.102Z  INFO metrics utc=2026-09-11T20:35:00.102Z rss_bytes=8421376
 2026-09-11T20:35:00.140Z  INFO child completed child_stdout="2026-09-11T20:35:00.102Z rss_bytes=8421376 elevated=true"
 ```
