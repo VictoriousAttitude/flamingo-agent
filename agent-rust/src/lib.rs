@@ -9,5 +9,6 @@
 pub mod child;
 pub mod cli;
 pub mod config;
+pub mod logging;
 pub mod metrics;
 pub mod platform;
