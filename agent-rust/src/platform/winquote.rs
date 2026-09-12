@@ -174,7 +174,14 @@ mod tests {
             let line = quote_command_line(&args.iter().map(OsString::from).collect::<Vec<_>>());
             proptest::prop_assert_eq!(parse_command_line(&line), args.clone());
             #[cfg(windows)]
-            proptest::prop_assert_eq!(parse_with_windows(&line), args);
+            {
+                // CommandLineToArgvW parses the first token as the program name with
+                // different rules, so model the real call site: our string is always the
+                // parameter tail.
+                let parsed = parse_with_windows(&format!("prog {line}"));
+                proptest::prop_assert_eq!(parsed.first().map(String::as_str), Some("prog"));
+                proptest::prop_assert_eq!(&parsed[1..], &args[..]);
+            }
         }
     }
 
