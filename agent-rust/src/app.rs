@@ -130,6 +130,10 @@ pub(crate) fn exit_code_for_relaunch(
         Err(PlatformError::ElevationDeclined) => {
             (EXIT_PRIVILEGE, Some("administrator approval was declined"))
         }
+        Err(PlatformError::ElevationBlockedByPolicy) => (
+            EXIT_PRIVILEGE,
+            Some("elevation is blocked by policy for this account; run from an administrator account"),
+        ),
         Err(PlatformError::Unsupported(_)) => (
             EXIT_PRIVILEGE,
             Some("this command needs root privileges; run it with sudo"),
@@ -196,6 +200,13 @@ mod tests {
         assert_eq!(code, EXIT_PRIVILEGE);
         assert!(
             message.unwrap_or_default().contains("declined"),
+            "{message:?}"
+        );
+
+        let (code, message) = exit_code_for_relaunch(Err(PlatformError::ElevationBlockedByPolicy));
+        assert_eq!(code, EXIT_PRIVILEGE);
+        assert!(
+            message.unwrap_or_default().contains("blocked by policy"),
             "{message:?}"
         );
 

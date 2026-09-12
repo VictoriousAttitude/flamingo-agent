@@ -6,11 +6,11 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use windows_sys::Win32::Foundation::ERROR_CANCELLED;
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, GENERIC_WRITE, HANDLE,
     INVALID_HANDLE_VALUE,
 };
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DISABLED_BY_POLICY, ERROR_CANCELLED};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,
@@ -337,6 +337,8 @@ pub fn relaunch_privileged(args: &[OsString]) -> Result<i32, PlatformError> {
         // SAFETY: GetLastError has no preconditions.
         return Err(match unsafe { GetLastError() } {
             ERROR_CANCELLED => PlatformError::ElevationDeclined,
+            // The "automatically deny elevation requests" policy for standard users.
+            ERROR_ACCESS_DISABLED_BY_POLICY => PlatformError::ElevationBlockedByPolicy,
             code => PlatformError::Os {
                 call: "ShellExecuteExW",
                 code,

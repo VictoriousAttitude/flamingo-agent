@@ -25,6 +25,9 @@ pub enum PlatformError {
     /// The user declined the elevation prompt.
     #[error("elevation prompt was declined")]
     ElevationDeclined,
+    /// Elevation is refused outright by policy for this account, so no prompt is offered.
+    #[error("elevation is blocked by policy for this account")]
+    ElevationBlockedByPolicy,
     /// The operation has no implementation on this platform.
     #[error("{0} is not supported on this platform")]
     Unsupported(&'static str),
