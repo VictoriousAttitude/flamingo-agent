@@ -24,16 +24,25 @@ pub fn format_utc(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// Classify one raw reading from the OS.
+///
+/// A zero is treated as "unavailable": a live process never has zero resident memory.
+/// memory-stats 1.2.0 has a first-call race on Linux (the `SMAPS_CHECKED` CAS is not
+/// ordered against the `SMAPS_EXIST`/`PAGE_SIZE` stores), so a concurrent first call can
+/// return 0 instead of a real reading.
+pub(crate) fn rss_bytes_from(physical_mem: usize) -> Result<u64, MetricsError> {
+    match physical_mem as u64 {
+        0 => Err(MetricsError::RssUnavailable),
+        bytes => Ok(bytes),
+    }
+}
+
 /// Resident memory of the current process in bytes.
 pub fn rss_bytes() -> Result<u64, MetricsError> {
-    // A zero is treated as "unavailable": a live process never has zero resident memory.
-    // memory-stats 1.2.0 has a first-call race on Linux (the `SMAPS_CHECKED` CAS is not
-    // ordered against the `SMAPS_EXIST`/`PAGE_SIZE` stores), so a concurrent first call can
-    // return 0 instead of a real reading.
-    memory_stats::memory_stats()
-        .map(|m| m.physical_mem as u64)
-        .filter(|&bytes| bytes > 0)
-        .ok_or(MetricsError::RssUnavailable)
+    match memory_stats::memory_stats() {
+        Some(stats) => rss_bytes_from(stats.physical_mem),
+        None => Err(MetricsError::RssUnavailable),
+    }
 }
 
 /// Take one sample.
@@ -66,6 +75,15 @@ mod tests {
     // Both RSS assertions live in one test on purpose: `memory_stats()` initialises its
     // statics on the first call without ordering them, so two tests calling it from
     // different threads can race and observe a zero reading.
+    #[test]
+    fn zero_rss_is_reported_unavailable() {
+        assert!(matches!(
+            rss_bytes_from(0),
+            Err(MetricsError::RssUnavailable)
+        ));
+        assert_eq!(rss_bytes_from(4096).unwrap(), 4096);
+    }
+
     #[test]
     fn rss_is_positive_and_collect_produces_a_recent_sample() {
         assert!(rss_bytes().unwrap() > 0);
