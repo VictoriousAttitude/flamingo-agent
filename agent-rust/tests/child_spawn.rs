@@ -126,3 +126,82 @@ async fn cancellation_interrupts_the_wait() {
     assert!(matches!(outcome, ChildOutcome::Cancelled), "{outcome:?}");
     assert!(started.elapsed() < Duration::from_secs(3));
 }
+
+/// The fixture writes its PID as soon as it starts; wait for it so a slow start is not
+/// mistaken for a child that never ran.
+async fn pid_written(path: &std::path::Path) -> Option<u32> {
+    for _ in 0..200 {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Ok(pid) = text.trim().parse::<u32>() {
+                return Some(pid);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    None
+}
+
+/// Poll for up to a second for the process to disappear. `kill(pid, 0)` still succeeds
+/// while the killed child is an unreaped zombie, so this also proves tokio reaped it; the
+/// wait must yield to the runtime for the reaper to make progress.
+#[cfg(unix)]
+async fn reaped(pid: u32) -> bool {
+    for _ in 0..100 {
+        // SAFETY: signal 0 only performs the existence and permission check.
+        if unsafe { libc::kill(pid as libc::pid_t, 0) } == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    false
+}
+
+#[tokio::test]
+async fn timed_out_child_process_is_gone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pid_file = tmp.path().join("child.pid");
+    let outcome = run_child(
+        &spec("pidfile_sleep", Duration::from_millis(500)),
+        &[pid_file.clone().into_os_string()],
+        &CancellationToken::new(),
+    )
+    .await;
+    assert!(matches!(outcome, ChildOutcome::TimedOut), "{outcome:?}");
+
+    let pid = pid_written(&pid_file)
+        .await
+        .unwrap_or_else(|| panic!("no pid in {}", pid_file.display()));
+
+    #[cfg(unix)]
+    assert!(
+        reaped(pid).await,
+        "pid {pid} is still alive after the timeout"
+    );
+
+    // On Windows the PID in the file belongs to the PowerShell process cmd.exe started,
+    // and killing cmd.exe does not kill its children: the "process is gone" assertion
+    // would be about the wrong process, so only the timeout itself is asserted here.
+    #[cfg(windows)]
+    assert!(pid > 0, "pid must be a real process id");
+}
+
+#[tokio::test]
+async fn large_stdout_does_not_deadlock() {
+    // 300 kB is far past the 64 kB pipe buffer: a child whose output is only drained
+    // after it exits would block forever here.
+    let outcome = run_child(
+        &spec("spam", Duration::from_secs(10)),
+        &[],
+        &CancellationToken::new(),
+    )
+    .await;
+    match outcome {
+        ChildOutcome::Completed { code, stdout, .. } => {
+            assert_eq!(code, Some(0));
+            assert!(stdout.len() >= 300_000, "only {} bytes", stdout.len());
+        }
+        other => panic!("unexpected outcome {other:?}"),
+    }
+}
