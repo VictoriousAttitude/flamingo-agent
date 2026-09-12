@@ -32,6 +32,15 @@ jobs:
         run: cargo test
       - name: Compile-check every Windows code path
         run: cargo check --target x86_64-pc-windows-gnu --all-targets
+      - name: Configure logger-child
+        working-directory: ${{ github.workspace }}
+        run: cmake -S logger-child -B logger-child/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build logger-child
+        working-directory: ${{ github.workspace }}
+        run: cmake --build logger-child/build
+      - name: Test logger-child
+        working-directory: ${{ github.workspace }}
+        run: ctest --test-dir logger-child/build --output-on-failure
 
   windows:
     name: Windows (MSVC, static CRT)
@@ -51,3 +60,12 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+      - name: Configure logger-child
+        working-directory: ${{ github.workspace }}
+        run: cmake -S logger-child -B logger-child/build -A x64
+      - name: Build logger-child
+        working-directory: ${{ github.workspace }}
+        run: cmake --build logger-child/build --config Release
+      - name: Test logger-child
+        working-directory: ${{ github.workspace }}
+        run: ctest --test-dir logger-child/build -C Release --output-on-failure
