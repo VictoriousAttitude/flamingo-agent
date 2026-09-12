@@ -45,6 +45,9 @@ pub enum ServiceError {
         /// The state that was awaited.
         wanted: String,
     },
+    /// `--uninstall` was asked to remove a service that is not registered.
+    #[error("FlamingoAgent is not installed")]
+    NotInstalled,
     /// The previous registration is still being deleted, so it cannot be recreated yet.
     #[error("a previous FlamingoAgent registration is still being removed; close the Services console and any other handle to the service, then retry")]
     MarkedForDelete,

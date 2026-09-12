@@ -29,6 +29,8 @@ const ERROR_SERVICE_EXISTS: i32 = 1073;
 /// `CreateService`/`OpenService` fail with this while a deleted registration still has open
 /// handles (typically the Services console); the name becomes free once they are closed.
 const ERROR_SERVICE_MARKED_FOR_DELETE: i32 = 1072;
+/// `OpenService` fails with this when the name was never registered.
+const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
 
 const WAIT_HINT: Duration = Duration::from_secs(10);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -189,13 +191,23 @@ pub fn install(exe: &Path) -> Result<(), ServiceError> {
     wait_for_state(&service, ServiceState::Running, START_TIMEOUT)
 }
 
-/// Stop the service if running, then delete it.
+/// Stop the service if running, then delete it. Removing something that was never
+/// registered is reported as `NotInstalled`, because the raw OS error 1060 behind it reads
+/// as a failure of the tool rather than as the answer to the question that was asked.
 pub fn uninstall() -> Result<(), ServiceError> {
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
-    let service = manager.open_service(
+    let service = match manager.open_service(
         SERVICE_NAME,
         ServiceAccess::STOP | ServiceAccess::QUERY_STATUS | ServiceAccess::DELETE,
-    )?;
+    ) {
+        Ok(service) => service,
+        Err(windows_service::Error::Winapi(err))
+            if err.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST) =>
+        {
+            return Err(ServiceError::NotInstalled)
+        }
+        Err(err) => return Err(ServiceError::Api(err)),
+    };
     if service.query_status()?.current_state != ServiceState::Stopped {
         // A failed `stop` is not fatal on its own (the service may be stopping already), but
         // if it then never reaches Stopped the stop error is the useful diagnostic.
