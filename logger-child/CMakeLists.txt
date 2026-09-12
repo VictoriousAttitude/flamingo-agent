@@ -45,3 +45,17 @@ add_test(NAME child_appends_never_truncates
     -DCHILD=$<TARGET_FILE:logger-child>
     -DLOG=${CMAKE_BINARY_DIR}/append.log
     -P ${CMAKE_SOURCE_DIR}/tests/append_test.cmake)
+
+# The happy-path regex accepts either elevation; this one pins it to the privilege the test
+# process really has.
+add_test(NAME child_reports_the_expected_elevation
+  COMMAND ${CMAKE_COMMAND}
+    -DCHILD=$<TARGET_FILE:logger-child>
+    -DLOG=${CMAKE_BINARY_DIR}/elevation.log
+    -P ${CMAKE_SOURCE_DIR}/tests/expected_elevation.cmake)
+
+add_test(NAME child_default_log_path_is_used_when_flag_absent
+  COMMAND ${CMAKE_COMMAND}
+    -DCHILD=$<TARGET_FILE:logger-child>
+    -DWORKDIR=${CMAKE_BINARY_DIR}
+    -P ${CMAKE_SOURCE_DIR}/tests/default_path_test.cmake)
