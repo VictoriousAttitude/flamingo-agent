@@ -158,11 +158,17 @@ jobs:
       # The service is gone at this point, so this exercises the ERROR_SERVICE_DOES_NOT_EXIST
       # branch of `uninstall` against the real SCM. `Continue` is needed because the agent
       # reports the failure on stderr, which pwsh would otherwise turn into a step error
-      # before the exit code and the message can be checked.
+      # before the exit code and the message can be checked. A non-zero exit is the expected
+      # result here, so the code is captured and the script ends with an explicit `exit 0`:
+      # GitHub appends `exit $LASTEXITCODE` to every pwsh step, which would otherwise fail
+      # the step on the very exit code this test is asserting.
       - name: Uninstall when not installed
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          & "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe" --uninstall 2>&1 | Tee-Object -Variable out
-          if ($LASTEXITCODE -ne 1) { throw "expected exit 1, got $LASTEXITCODE" }
-          if (-not ($out -match 'not installed')) { throw "message missing: $out" }
+          $out = & "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe" --uninstall 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host "exit $code : $out"
+          if ($code -ne 1) { throw "expected exit 1, got $code" }
+          if ($out -notmatch 'not installed') { throw "message missing: $out" }
+          exit 0
