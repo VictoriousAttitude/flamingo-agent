@@ -45,6 +45,7 @@ windows-sys = { version = "0.61", features = [
 libc = "0.2"
 
 [dev-dependencies]
+proptest = "1"
 tempfile = "3"
 # `test-util` enables tokio's paused clock, used by the loop-timing test.
 tokio = { version = "1", features = ["test-util"] }
