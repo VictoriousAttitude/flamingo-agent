@@ -33,7 +33,9 @@ use windows_sys::Win32::System::Com::{
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject, INFINITE,
 };
-use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+use windows_sys::Win32::UI::Shell::{
+    ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use super::winquote::quote_command_line;
@@ -298,6 +300,13 @@ pub fn is_privileged() -> Result<bool, PlatformError> {
 /// Relaunch this executable through the shell's `runas` verb (one UAC prompt), wait for the
 /// elevated instance and return its exit code. Fails with `ElevationDeclined` if the user
 /// cancels the prompt.
+///
+/// Error dialogs are suppressed (`SEE_MASK_FLAG_NO_UI`): when elevation is refused outright,
+/// for example by the "automatically deny elevation requests" policy for standard users,
+/// Windows would otherwise show a modal message box and this call would block until someone
+/// dismissed it. With the flag the refusal comes back as an error code instead, so the agent
+/// can never hang on a dialog nobody is there to close. The consent prompt itself is not an
+/// error dialog and is unaffected.
 pub fn relaunch_privileged(args: &[OsString]) -> Result<i32, PlatformError> {
     let exe =
         std::env::current_exe().map_err(|e| PlatformError::io("locating own executable", e))?;
@@ -317,7 +326,7 @@ pub fn relaunch_privileged(args: &[OsString]) -> Result<i32, PlatformError> {
     // SAFETY: an all-zero SHELLEXECUTEINFOW is the documented "unset" state.
     let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
     info.lpVerb = verb.as_ptr();
     info.lpFile = file.as_ptr();
     info.lpParameters = parameters.as_ptr();
