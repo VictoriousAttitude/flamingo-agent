@@ -26,6 +26,9 @@ use crate::cli::Cli;
 const ERROR_FAILED_SERVICE_CONTROLLER_CONNECT: i32 = 1063;
 /// `CreateService` fails with this when the name is already registered.
 const ERROR_SERVICE_EXISTS: i32 = 1073;
+/// `CreateService`/`OpenService` fail with this while a deleted registration still has open
+/// handles (typically the Services console); the name becomes free once they are closed.
+const ERROR_SERVICE_MARKED_FOR_DELETE: i32 = 1072;
 
 const WAIT_HINT: Duration = Duration::from_secs(10);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -169,6 +172,11 @@ pub fn install(exe: &Path) -> Result<(), ServiceError> {
             let service = manager.open_service(SERVICE_NAME, access)?;
             service.change_config(&info)?;
             service
+        }
+        Err(windows_service::Error::Winapi(err))
+            if err.raw_os_error() == Some(ERROR_SERVICE_MARKED_FOR_DELETE) =>
+        {
+            return Err(ServiceError::MarkedForDelete)
         }
         Err(err) => return Err(ServiceError::Api(err)),
     };
