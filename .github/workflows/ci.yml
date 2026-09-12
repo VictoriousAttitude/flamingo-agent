@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
           targets: x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@v2
         with:
@@ -30,6 +30,17 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage (lcov)
+        run: cargo llvm-cov --all-targets --lcov --output-path lcov.info
+      - name: Coverage (line)
+        run: cargo llvm-cov report --summary-only --fail-under-lines 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: agent-rust/lcov.info
       - name: Compile-check every Windows code path
         run: cargo check --target x86_64-pc-windows-gnu --all-targets
       - name: Configure logger-child

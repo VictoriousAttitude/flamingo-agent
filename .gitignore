@@ -4,6 +4,7 @@
 # Build outputs
 /agent-rust/target/
 /logger-child/build/
+/agent-rust/lcov.info
 
 # Editor / OS noise
 .idea/
