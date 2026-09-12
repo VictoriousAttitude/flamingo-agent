@@ -247,3 +247,67 @@ fn wait_for_state(
         std::thread::sleep(POLL);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The three status reports the SCM sees. `wait_hint` is the contract that keeps the SCM
+    /// from declaring the service hung during start-up and stop, and a `Stopped` report must
+    /// carry the diagnostic exit code through unchanged; both are easy to lose in a refactor
+    /// and invisible until a service actually misbehaves on a machine.
+    #[test]
+    fn status_builders_have_the_specified_shape() {
+        let starting = pending(ServiceState::StartPending);
+        assert_eq!(starting.service_type, ServiceType::OWN_PROCESS);
+        assert_eq!(starting.current_state, ServiceState::StartPending);
+        assert!(
+            starting.controls_accepted.is_empty(),
+            "a pending service must not advertise controls: {:?}",
+            starting.controls_accepted
+        );
+        assert_eq!(starting.wait_hint, Duration::from_secs(10));
+        assert_eq!(starting.checkpoint, 0);
+        assert_eq!(starting.process_id, None);
+
+        let running = running();
+        assert_eq!(running.current_state, ServiceState::Running);
+        assert_eq!(
+            running.controls_accepted,
+            ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN
+        );
+        assert_eq!(running.wait_hint, Duration::default());
+
+        let stopped = stopped(ServiceExitCode::ServiceSpecific(EXIT_PANIC));
+        assert_eq!(stopped.current_state, ServiceState::Stopped);
+        assert_eq!(
+            stopped.exit_code,
+            ServiceExitCode::ServiceSpecific(EXIT_PANIC)
+        );
+        assert_eq!(stopped.wait_hint, Duration::default());
+        assert_eq!(stopped.service_type, ServiceType::OWN_PROCESS);
+    }
+
+    /// The registration the Services console shows (design §4.2): automatic start, its own
+    /// process, LocalSystem (`account_name == None`) and no launch arguments — the CLI
+    /// rejects runtime overrides next to `--install` precisely because none would be stored.
+    #[test]
+    fn service_info_matches_the_design() {
+        let exe = Path::new(r"C:\Program Files\FlamingoAgent\flamingo-agent.exe");
+        let info = service_info(exe);
+        assert_eq!(info.name, OsString::from(SERVICE_NAME));
+        assert_eq!(info.display_name, OsString::from(SERVICE_DISPLAY_NAME));
+        assert_eq!(info.service_type, ServiceType::OWN_PROCESS);
+        assert_eq!(info.start_type, ServiceStartType::AutoStart);
+        assert_eq!(info.error_control, ServiceErrorControl::Normal);
+        assert_eq!(info.executable_path, exe);
+        assert!(
+            info.launch_arguments.is_empty(),
+            "{:?}",
+            info.launch_arguments
+        );
+        assert!(info.dependencies.is_empty(), "{:?}", info.dependencies);
+        assert_eq!(info.account_name, None, "must run as LocalSystem");
+        assert_eq!(info.account_password, None);
+    }
+}
