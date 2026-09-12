@@ -589,6 +589,8 @@ exercised is named as such.
 | `cli` | `--install`, `--uninstall`, bare, and every override parse; conflicting flags rejected |
 | `config` | path resolution relative to a fake exe location |
 | `platform::unix` | on a temp dir: dir `0700`, file `0600`, re-apply fixes a `0644` file; `chown` asserted only when euid is 0 |
+| `platform::winquote` | a property-based test (`quoting_round_trips_through_the_reference_parser`) checks quoting round-trips through a reference command-line parser for randomly generated arguments; a fixed set of tricky arguments is additionally checked against the real `CommandLineToArgvW` on the Windows job |
+| `platform::windows` | elevation is reported `true` on the elevated CI runner (`is_privileged_is_true_on_an_elevated_runner`); a file whose ACL denies write is recovered by re-applying the DACL (`secure_file_recovers_a_file_that_denies_write`); the log directory is created when its parent does not yet exist (`secure_dir_creates_missing_parents`) |
 | `agent` | with period = 50 ms and a counting cycle: N ticks in ~N·50 ms; cancellation stops within one period; a cycle that returns `Err` does not stop the loop; a cycle that **panics** does not stop the loop |
 
 ### 14.2 Integration tests (`agent-rust/tests/`, any OS)
@@ -600,12 +602,24 @@ the spawn path is tested without a C++ toolchain:
 - exits 3 → outcome `non-zero` with stderr captured
 - sleeps 10 s → outcome `timed out` within `child_timeout + 200 ms`, and the process is gone
 - non-existent path → outcome `spawn failed`
+- a full cycle re-applies the DACL to the child log after it is deleted mid-run
+  (`dacl_is_reapplied_after_the_log_is_deleted`)
+
+Root-only tests live separately in `tests/privileged_linux.rs`, `#[ignore]`d by default so an
+unprivileged `cargo test` stays green: a root-owned `0700`/`0600` log path
+(`secure_paths_are_root_owned_0600`), and a full interactive run of the real binary, stopped
+with `SIGINT`, that completes two cycles cleanly (`interactive_run_under_root_completes_two_cycles`).
+CI runs them under `sudo` as a separate step (§14.5).
 
 ### 14.3 Child tests (`ctest`, any OS)
 
 - happy path: exit 0, stdout equals `<utc> rss_bytes=<n> elevated=<flag>`, file contains
   exactly that line; `<flag>` is `false` when the test runs unprivileged, `true` under
-  sudo/elevation
+  sudo/elevation, with the expected flag derived from the process's own privilege rather than
+  hard-coded (`expected_elevation`)
+- falls back to the platform default log path when `--log-file` is omitted, observed as
+  file creation on Windows and as the documented exit code and path on Unix
+  (`default_path_test`)
 - second run appends (two lines), never truncates
 - missing `--rss-bytes` → exit 1
 - unwritable `--log-file` (a directory path) → exit 2, message on stderr
@@ -675,6 +689,30 @@ Stated verbatim in the README so the reviewer knows what was actually run:
   and stop/uninstall output pasted. The three items that need an interactive session — UAC,
   the standard-user `runas` denial, and start-after-reboot — are listed as not executed.
 - **macOS:** compiles; not executed.
+
+### 14.7 Coverage and tiers
+
+Measured line coverage is 87.78% (Linux, `cargo llvm-cov --all-targets`). CI enforces a floor
+of 84% (`floor(87.78) - 3`) on the `linux` job and publishes the full `lcov.info` as a build
+artifact, so a coverage regression fails the build rather than being noticed later.
+
+The tests fall into three tiers:
+
+1. **Portable unit and integration tests**, run on every commit on both Linux and Windows.
+   These include property-based tests of the Windows argument-quoting logic, which check
+   quoting round-trips through a reference command-line parser and, on the Windows job, also
+   against the real `CommandLineToArgvW`.
+2. **Privileged tests**, run only where they mean something: on Linux, a `sudo`-run job on
+   the CI runner exercises the root-owned `0600` log path and a full interactive run of the
+   agent that is stopped with `SIGINT`; on Windows, a handful of unit tests only pass under
+   an elevated runner — elevation reported `true`, DACL recovery of a file whose ACL denies
+   write, and log-directory creation when the parent directory does not yet exist.
+3. **The end-to-end job**, which installs the real Windows service and inspects it live.
+
+Excluded by nature, because they need a live SCM or an interactive desktop session and cannot
+be produced from a script: the UAC consent prompt itself, `ServiceMain` running under a real
+Service Control Manager, and the SCM's state-polling loops. These remain on the Windows VM
+checklist (§14.4).
 
 ---
 

@@ -118,6 +118,30 @@ path resolution, `0700`/`0600` protection on Unix, protected-DACL application on
 child spawn/timeout/failure/cancellation paths, the loop surviving errors and panics, and
 the child's exit codes and append-only behavior.
 
+### Coverage and test tiers
+
+Measured line coverage is 87.78% (Linux, `cargo llvm-cov --all-targets`). CI enforces a floor
+of 84% (`floor(87.78) - 3`) on the `linux` job and publishes the full `lcov.info` as a build
+artifact, so a coverage regression fails the build rather than being noticed later.
+
+The tests fall into three tiers:
+
+1. **Portable unit and integration tests**, run on every commit on both Linux and Windows.
+   These include property-based tests of the Windows argument-quoting logic, which check
+   quoting round-trips through a reference command-line parser and, on the Windows job, also
+   against the real `CommandLineToArgvW`.
+2. **Privileged tests**, run only where they mean something: on Linux, a `sudo`-run job on
+   the CI runner exercises the root-owned `0600` log path and a full interactive run of the
+   agent that is stopped with `SIGINT`; on Windows, a handful of unit tests only pass under
+   an elevated runner — elevation reported `true`, DACL recovery of a file whose ACL denies
+   write, and log-directory creation when the parent directory does not yet exist.
+3. **The end-to-end job**, which installs the real Windows service and inspects it live.
+
+Excluded by nature, because they need a live SCM or an interactive desktop session and cannot
+be produced from a script: the UAC consent prompt itself, `ServiceMain` running under a real
+Service Control Manager, and the SCM's state-polling loops. These remain on the Windows VM
+checklist below.
+
 ### Windows verification checklist
 
 Run on a clean Windows 11 or Server 2022 machine after `install.ps1`:
