@@ -85,7 +85,9 @@ fn run_service() -> windows_service::Result<()> {
         })
     }));
 
-    status.set_service_status(pending(ServiceState::StopPending))?;
+    // Best-effort: the terminal `Stopped` report below must never be skipped, so a
+    // failed intermediate report here is deliberately ignored.
+    let _ = status.set_service_status(pending(ServiceState::StopPending));
     let exit_code = match outcome {
         Ok(Ok(())) => ServiceExitCode::Win32(0),
         Ok(Err(_)) => ServiceExitCode::ServiceSpecific(EXIT_BOOTSTRAP_FAILED),
