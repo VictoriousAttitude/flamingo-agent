@@ -51,7 +51,10 @@ mod tests {
         Arc::new(AtomicUsize::new(0))
     }
 
-    #[tokio::test]
+    /// Paused time makes this exact: tokio auto-advances the clock to the next timer
+    /// whenever the runtime is idle, so the interval fires at 0, 50, 100, 150, 200 and
+    /// 250 ms and the cancellation at 275 ms lands before the seventh tick.
+    #[tokio::test(start_paused = true)]
     async fn runs_once_per_period_starting_immediately() {
         let count = counter();
         let cancel = CancellationToken::new();
@@ -69,8 +72,7 @@ mod tests {
             }
         })
         .await;
-        let n = count.load(Ordering::SeqCst);
-        assert!((5..=7).contains(&n), "expected about 6 cycles, got {n}");
+        assert_eq!(count.load(Ordering::SeqCst), 6);
     }
 
     #[tokio::test]
