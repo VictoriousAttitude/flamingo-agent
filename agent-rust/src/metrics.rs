@@ -1,5 +1,7 @@
 //! The two sampled metrics: current UTC time and this process's resident memory.
 
+use std::sync::Once;
+
 use chrono::{DateTime, SecondsFormat, Utc};
 
 /// One sample.
@@ -24,12 +26,25 @@ pub fn format_utc(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// `memory-stats` initialises its Linux statics on first use without ordering them, so a
+/// concurrent first call can read a half-initialised state and report zero. Funnelling the
+/// first call through a `Once` guarantees the initialisation completes before any other
+/// thread queries memory. (Production calls are already sequential; this matters for tests.)
+static WARM_UP: Once = Once::new();
+
+fn memory_stats_serialized() -> Option<memory_stats::MemoryStats> {
+    WARM_UP.call_once(|| {
+        let _ = memory_stats::memory_stats();
+    });
+    memory_stats::memory_stats()
+}
+
 /// Classify one raw reading from the OS.
 ///
-/// A zero is treated as "unavailable": a live process never has zero resident memory.
-/// memory-stats 1.2.0 has a first-call race on Linux (the `SMAPS_CHECKED` CAS is not
-/// ordered against the `SMAPS_EXIST`/`PAGE_SIZE` stores), so a concurrent first call can
-/// return 0 instead of a real reading.
+/// A zero is treated as "unavailable": a live process never has zero resident memory. The
+/// `Once` in `memory_stats_serialized` already closes memory-stats 1.2.0's Linux first-call
+/// race (the `SMAPS_CHECKED` CAS is not ordered against the `SMAPS_EXIST`/`PAGE_SIZE`
+/// stores), so this filter is defence in depth rather than the primary safeguard.
 pub(crate) fn rss_bytes_from(physical_mem: usize) -> Result<u64, MetricsError> {
     match physical_mem as u64 {
         0 => Err(MetricsError::RssUnavailable),
@@ -39,7 +54,7 @@ pub(crate) fn rss_bytes_from(physical_mem: usize) -> Result<u64, MetricsError> {
 
 /// Resident memory of the current process in bytes.
 pub fn rss_bytes() -> Result<u64, MetricsError> {
-    match memory_stats::memory_stats() {
+    match memory_stats_serialized() {
         Some(stats) => rss_bytes_from(stats.physical_mem),
         None => Err(MetricsError::RssUnavailable),
     }
@@ -93,5 +108,19 @@ mod tests {
         assert!(m.utc >= before);
         assert!(m.rss_bytes > 0);
         assert!(m.utc_string().ends_with('Z'));
+    }
+
+    // Regression test for the memory-stats first-call race: spawn many threads that all
+    // race to be the first caller and assert every one of them gets a real reading. Within
+    // this test binary `WARM_UP` may already have fired from an earlier test, which is
+    // fine — the contract under test is that `rss_bytes()` never surfaces the race.
+    #[test]
+    fn first_call_is_serialized_across_threads() {
+        let handles: Vec<_> = (0..16).map(|_| std::thread::spawn(rss_bytes)).collect();
+
+        for handle in handles {
+            let result = handle.join().unwrap();
+            assert!(matches!(result, Ok(n) if n > 0));
+        }
     }
 }
