@@ -62,6 +62,7 @@ limitation or next step.
 │   │   ├── lib.rs               module tree; everything below is testable from tests/
 │   │   ├── cli.rs               clap definitions + defaults
 │   │   ├── config.rs            resolved runtime config (paths, period, timeout)
+│   │   ├── app.rs               bootstrap order, interactive entry point, privilege gate
 │   │   ├── metrics.rs           UTC timestamp + own RSS                        [portable]
 │   │   ├── cycle.rs             one collection cycle: collect → log → spawn     [portable]
 │   │   ├── agent.rs             the tick loop + cancellation                   [portable]
@@ -70,9 +71,11 @@ limitation or next step.
 │   │   ├── platform/
 │   │   │   ├── mod.rs           `#[cfg]` selects one impl; single shared signature set
 │   │   │   ├── windows.rs       secure_log (SDDL), is_elevated, relaunch_elevated, paths
+│   │   │   ├── winquote.rs      Windows command-line quoting for the UAC relaunch
 │   │   │   └── unix.rs          secure_log (0600 root), is_elevated (euid 0), paths
 │   │   └── service/
-│   │       ├── mod.rs           `#[cfg]` selects; unix impl returns Unsupported
+│   │       ├── mod.rs           `#[cfg]` selects; errors shared by both impls
+│   │       ├── unsupported.rs   non-Windows stub: install/uninstall report Unsupported
 │   │       └── windows.rs       dispatcher, ServiceMain, control handler, install/uninstall
 │   └── tests/                   integration tests using fixture children
 ├── logger-child/                C++17 child, CMake, CTest
@@ -457,9 +460,11 @@ carries a `// SAFETY:` comment stating the invariant; all of them live in
 Process exit codes: `0` success · `1` runtime failure · `2` usage · `3` insufficient
 privilege · `4` unsupported on this platform.
 
-The release profile keeps the default `panic = "unwind"`. Setting `panic = "abort"` would
-turn every panic into immediate process death and silently defeat the cycle isolation in
-§5.4; the unit test for a panicking cycle exists precisely to catch that regression.
+The release profile pins `panic = "unwind"` explicitly. Setting `panic = "abort"` would turn
+every panic into immediate process death and silently defeat the cycle isolation in §5.4.
+The unit test for a panicking cycle documents the intended behaviour but cannot catch that
+regression on its own: `cargo test` builds with the test profile, which always unwinds, so
+the `[profile.release]` entry is what actually holds the guarantee in a shipped binary.
 
 ---
 
@@ -628,17 +633,34 @@ Run on a fresh Windows 11 or Server 2022 VM after installing the documented prer
 
 ### 14.5 Continuous integration (`.github/workflows/ci.yml`)
 
-Runs on every push and pull request. Two jobs, both required to pass:
+Runs on every push and pull request. Three jobs, all required to pass:
 
 | Job | Runner | Steps |
 |---|---|---|
 | `linux` | `ubuntu-latest` | `cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo test` · `cmake` configure/build + `ctest` for the child · `cargo check --target x86_64-pc-windows-gnu` (compile-checks every `cfg(windows)` path) |
 | `windows` | `windows-latest` | `cargo clippy --all-targets -- -D warnings` · `cargo test` (MSVC, static CRT) · `cmake -A x64` build + `ctest` for the child |
+| `windows-service` | `windows-latest`, `needs: [windows]` | end-to-end run of the real service (below) |
 
-CI proves compilation, unit, integration, and child tests on both operating systems on every
-commit. It does **not** exercise the SCM, ACL enforcement, or UAC, which need an interactive
-Windows session with administrator rights; those remain on the VM checklist (§14.4). The
-README says so explicitly, so a green badge is never mistaken for full verification.
+`windows-service` runs only after `windows` is green, so a compile or unit-test failure is
+never diagnosed as a service failure. The GitHub runner account is an administrator, which
+is what makes the SCM and the ACL reachable from CI at all. The job:
+
+1. installs everything with `install.ps1` exactly as a reviewer would;
+2. asserts `sc.exe qc` reports `AUTO_START` and `LocalSystem`, and `sc.exe query` reports `RUNNING`;
+3. waits 12 s, then checks `agent.log` shows the 5 s cadence and `child.log` has at least two
+   lines, the last ending in `elevated=true`;
+4. asserts `icacls child.log` shows exactly two ACEs (Administrators and SYSTEM, both `(F)`)
+   and no inherited `(I)` entry;
+5. stops the service, requires it to return in under 8 s with no orphaned `logger-child`,
+   then uninstalls and requires the registration to be gone;
+6. **reinstalls** with `install.ps1` a second time, requires `RUNNING` again, and uninstalls
+   once more — the idempotent-reinstall claim in the README is therefore tested, not asserted.
+
+CI now proves compilation, unit, integration, and child tests on both operating systems, plus
+service registration, the log cadence and the exact ACL on a real Windows machine. It still
+does **not** exercise UAC or start-after-reboot: a runner has no interactive desktop session
+and cannot reboot itself. Those two, and the standard-user access-denied check, stay on the
+VM checklist (§14.4) and the README lists them as not executed.
 
 Toolchains are pinned to `stable` via `dtolnay/rust-toolchain`; the cross target is added
 with `rustup target add`. No secrets, no deployment step.
@@ -649,8 +671,9 @@ Stated verbatim in the README so the reviewer knows what was actually run:
 
 - **Linux:** unit, integration, and child tests pass; interactive run under `sudo` produces
   a root-owned `0600` log.
-- **Windows:** full checklist §14.4 executed on a clean VM, with the `icacls` and `runas`
-  output pasted.
+- **Windows:** the `windows-service` CI job (§14.5), with its `sc qc`, `agent.log`, `icacls`
+  and stop/uninstall output pasted. The three items that need an interactive session — UAC,
+  the standard-user `runas` denial, and start-after-reboot — are listed as not executed.
 - **macOS:** compiles; not executed.
 
 ---
@@ -714,7 +737,9 @@ in ten minutes and see the evidence without reading code.
    real `child.log` excerpt.
 7. **Testing** — `cargo test`, `ctest`, and the Windows checklist from §14.4 with the
    actual output pasted for items 2, 6, 7, and 9.
-8. **Verified / not verified** — verbatim from §14.6, plus the CI badge and what it does and does not prove (§14.5).
+8. **Verified / not verified** — verbatim from §14.6, plus a statement of what CI proves and
+   does not prove (§14.5). No badge: the repository is private, so a badge would not render
+   for the reviewer.
 9. **Design notes** — link to `docs/design.md`, plus the five points a reviewer most needs
    inline: protected DACL and why the directory is locked, why no elevation in service mode,
    the cycle isolation guarantees, static CRT, and the platform boundary rule.
