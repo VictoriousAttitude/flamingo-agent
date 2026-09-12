@@ -354,6 +354,7 @@ pub fn relaunch_privileged(args: &[OsString]) -> Result<i32, PlatformError> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
 
     fn assert_file_policy(sddl: &str) {
         assert!(sddl.starts_with("D:P"), "not protected: {sddl}");
@@ -407,5 +408,73 @@ mod tests {
     #[test]
     fn is_privileged_answers() {
         let _ = is_privileged().unwrap();
+    }
+
+    /// The GitHub Windows runner runs elevated, so there the answer is knowable and the
+    /// happy path of `GetTokenInformation(TokenElevation)` is actually asserted. On a
+    /// developer machine the answer depends on how the shell was started, so the test skips
+    /// with a reason rather than asserting something it cannot know.
+    #[test]
+    fn is_privileged_is_true_on_an_elevated_runner() {
+        if std::env::var_os("GITHUB_ACTIONS").is_none() {
+            eprintln!("is_privileged_is_true_on_an_elevated_runner: skipped: not on CI");
+            return;
+        }
+        assert!(is_privileged().unwrap(), "the CI runner must be elevated");
+    }
+
+    /// `CreateDirectoryW` creates only the leaf, so a `--log-dir` whose parents do not exist
+    /// would fail with ERROR_PATH_NOT_FOUND without the explicit `create_dir_all`. The leaf
+    /// must still come out with the protected, inheritable DACL.
+    #[test]
+    fn secure_dir_creates_missing_parents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("a").join("b").join("FlamingoAgent");
+        secure_dir(&dir).unwrap();
+        assert!(dir.is_dir(), "{} was not created", dir.display());
+        let sddl = describe_protection(&dir).unwrap();
+        assert!(sddl.starts_with("D:P"), "{sddl}");
+        assert!(sddl.ends_with("(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)"), "{sddl}");
+    }
+
+    /// The fall-through in `secure_file`: when the existing file's DACL denies the caller
+    /// write access, `CreateFileW` fails and re-applying the DACL is the only thing that
+    /// repairs the file. The test process created the file, so it is the owner and keeps
+    /// WRITE_DAC even while `(W)` is denied — exactly the situation the agent is in when it
+    /// finds a tampered child log.
+    #[test]
+    fn secure_file_recovers_a_file_that_denies_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("child.log");
+        fs::write(&file, "keep me\r\n").unwrap();
+
+        let user = std::env::var("USERNAME").unwrap();
+        let denied = Command::new("icacls")
+            .arg(&file)
+            .arg("/deny")
+            .arg(format!("{user}:(W)"))
+            .output()
+            .unwrap();
+        assert!(
+            denied.status.success(),
+            "icacls /deny failed: {}{}",
+            String::from_utf8_lossy(&denied.stdout),
+            String::from_utf8_lossy(&denied.stderr)
+        );
+
+        secure_file(&file).unwrap();
+        assert_file_policy(&describe_protection(&file).unwrap());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "keep me\r\n");
+    }
+
+    /// Reporting the protection of a path that does not exist must surface the failing API,
+    /// not an empty string: the bootstrap log line is the evidence that the ACL was applied.
+    #[test]
+    fn describe_protection_on_missing_path_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        match describe_protection(&tmp.path().join("nope.log")) {
+            Err(PlatformError::Os { call, .. }) => assert_eq!(call, "GetNamedSecurityInfoW"),
+            other => panic!("expected a GetNamedSecurityInfoW error, got {other:?}"),
+        }
     }
 }
