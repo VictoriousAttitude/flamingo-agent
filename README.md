@@ -140,14 +140,79 @@ Run on a clean Windows 11 or Server 2022 machine after `install.ps1`:
 
 ## Verification evidence
 
-_Filled in after the checklist run; see below._
+The evidence below is the real output of the GitHub Actions `windows-service` job, which
+installs the service on a `windows-latest` runner (the runner account is an administrator)
+with `install.ps1`, lets it run, inspects it, then stops and removes it. It is not a
+hand-run VM session; the items that genuinely need one are listed as not executed at the
+end of this section.
+
+**1. Registered configuration — `sc.exe qc FlamingoAgent`**
+
+```
+[SC] QueryServiceConfig SUCCESS
+
+SERVICE_NAME: FlamingoAgent
+        TYPE               : 10  WIN32_OWN_PROCESS
+        START_TYPE         : 2   AUTO_START
+        ERROR_CONTROL      : 1   NORMAL
+        BINARY_PATH_NAME   : "C:\Program Files\FlamingoAgent\flamingo-agent.exe"
+        LOAD_ORDER_GROUP   :
+        TAG                : 0
+        DISPLAY_NAME       : Flamingo Agent
+        DEPENDENCIES       :
+        SERVICE_START_NAME : LocalSystem
+```
+
+**2. Three consecutive cycles — `agent.log`**
+
+Five seconds apart, each with a child that reported `elevated=true`:
+
+```
+2026-09-12T10:22:13.637068Z  INFO metrics utc=2026-09-12T10:22:13.637Z rss_bytes=13520896
+2026-09-12T10:22:13.662190Z  INFO child completed child_stdout=2026-09-12T10:22:13.637Z rss_bytes=13520896 elevated=true
+2026-09-12T10:22:18.645934Z  INFO metrics utc=2026-09-12T10:22:18.645Z rss_bytes=13557760
+2026-09-12T10:22:18.680329Z  INFO child completed child_stdout=2026-09-12T10:22:18.645Z rss_bytes=13557760 elevated=true
+2026-09-12T10:22:23.649067Z  INFO metrics utc=2026-09-12T10:22:23.649Z rss_bytes=13557760
+2026-09-12T10:22:23.686854Z  INFO child completed child_stdout=2026-09-12T10:22:23.649Z rss_bytes=13557760 elevated=true
+```
+
+**3. The child log's ACL — `icacls C:\ProgramData\FlamingoAgent\child.log`**
+
+Exactly two ACEs, no inherited (`(I)`) entries:
+
+```
+C:\ProgramData\FlamingoAgent\child.log BUILTIN\Administrators:(F)
+                                       NT AUTHORITY\SYSTEM:(F)
+
+Successfully processed 1 files; Failed processing 0 files
+```
+
+**4. Clean stop and uninstall**
+
+```
+stopped in 2064 ms
+FlamingoAgent removed
+```
+
+The job additionally asserts, and fails if not: no `logger-child` process survives the stop,
+`--uninstall` exits 0, and `Get-Service FlamingoAgent` afterwards returns nothing.
+
+**Not executed yet (needs an interactive Windows session):**
+
+- The UAC prompt on an interactive launch from a non-elevated shell (accept, decline → exit 3).
+- Standard-user access denial: `runas /user:tester "cmd /c type ...\child.log"` → `Access is denied.`
+- Start after a reboot (`Restart-Computer`, then `sc query FlamingoAgent` → RUNNING).
+
+A CI runner has no interactive desktop session, so UAC cannot be exercised there, and the
+job cannot reboot the machine it runs on.
 
 ## Verified / not verified
 
 - **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs a Linux job (rustfmt, clippy with warnings denied, unit and integration tests, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target) and a Windows job (clippy, unit and integration tests under MSVC with a static CRT, and the child's CTest suite). CI proves compilation and tests on both operating systems. It does not exercise UAC elevation or start-on-boot, which need an interactive Windows session and are covered by the checklist above. A third job installs the service through `install.ps1` on the Windows runner, verifies the registered configuration, the log output, and the exact ACL on `child.log`, then stops and uninstalls it.
 - **Linux:** unit, integration and child tests pass; an interactive run under `sudo`
   produces a root-owned `0600` log.
-- **Windows:** the checklist above, executed on a clean VM (evidence section).
+- **Windows:** the end-to-end CI job above; the interactive-session items (UAC,
+  standard-user denial, reboot) are listed as not executed.
 - **macOS:** compiles; not executed.
 
 ## Design notes
