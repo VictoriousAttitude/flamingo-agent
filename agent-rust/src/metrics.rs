@@ -26,8 +26,13 @@ pub fn format_utc(t: DateTime<Utc>) -> String {
 
 /// Resident memory of the current process in bytes.
 pub fn rss_bytes() -> Result<u64, MetricsError> {
+    // A zero is treated as "unavailable": a live process never has zero resident memory.
+    // memory-stats 1.2.0 has a first-call race on Linux (the `SMAPS_CHECKED` CAS is not
+    // ordered against the `SMAPS_EXIST`/`PAGE_SIZE` stores), so a concurrent first call can
+    // return 0 instead of a real reading.
     memory_stats::memory_stats()
         .map(|m| m.physical_mem as u64)
+        .filter(|&bytes| bytes > 0)
         .ok_or(MetricsError::RssUnavailable)
 }
 
@@ -58,13 +63,13 @@ mod tests {
         assert_eq!(format_utc(t), "2026-01-02T03:04:05.006Z");
     }
 
+    // Both RSS assertions live in one test on purpose: `memory_stats()` initialises its
+    // statics on the first call without ordering them, so two tests calling it from
+    // different threads can race and observe a zero reading.
     #[test]
-    fn rss_is_positive_on_this_platform() {
+    fn rss_is_positive_and_collect_produces_a_recent_sample() {
         assert!(rss_bytes().unwrap() > 0);
-    }
 
-    #[test]
-    fn collect_produces_a_recent_sample() {
         let before = Utc::now();
         let m = collect().unwrap();
         assert!(m.utc >= before);
