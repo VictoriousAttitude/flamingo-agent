@@ -147,6 +147,13 @@ exercises on every push but does not instrument. Two checklist items need a huma
 machine and no script can perform them: clicking Accept on the UAC consent dialog, and an
 actual reboot.
 
+**Supply chain.** The Linux job also runs `cargo audit` against the RustSec advisory database
+and `cargo deny check` with the policy in `agent-rust/deny.toml`: a known vulnerability or a
+yanked crate fails the build, every dependency license must be on an explicit allow-list
+(MIT, Apache-2.0, Unicode-3.0), and crates.io is the only permitted source. The Rust
+toolchain is pinned to the exact release the project is linted with, and every GitHub action
+is pinned to a commit SHA.
+
 ### Windows verification checklist
 
 Run on a clean Windows 11 or Server 2022 machine after `install.ps1`:

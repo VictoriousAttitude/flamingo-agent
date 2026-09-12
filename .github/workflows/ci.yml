@@ -29,6 +29,15 @@ jobs:
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2
+        with:
+          tool: cargo-deny,cargo-audit
+      # Policy in agent-rust/deny.toml: known vulnerabilities and yanked crates fail the build,
+      # every license must be on the explicit allow-list, and only crates.io is a valid source.
+      - name: Supply chain (cargo deny)
+        run: cargo deny check
+      - name: Supply chain (cargo audit)
+        run: cargo audit
       - name: Test
         run: cargo test
       # Runs before the coverage steps so the instrumented run is untouched by root.

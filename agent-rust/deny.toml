@@ -1,0 +1,33 @@
+# cargo-deny policy for the agent crate. Run with `cargo deny check` from `agent-rust/`;
+# CI runs it on every push alongside `cargo audit`.
+
+[graph]
+all-features = false
+
+[advisories]
+# A vulnerability or a yanked crate in the lock file fails the build; unmaintained crates
+# are reported as warnings so they are seen without blocking a submission on an upstream
+# maintainer's status.
+version = 2
+yanked = "deny"
+unmaintained = "workspace"
+
+[licenses]
+# Every dependency in the tree is licensed under one of these, or offers one of them as an
+# alternative. The list is deliberately minimal: a new dependency with a different license
+# fails the check and has to be added here on purpose.
+version = 2
+allow = ["MIT", "Apache-2.0", "Unicode-3.0"]
+# This crate is `publish = false` and carries no license field of its own.
+private = { ignore = true }
+
+[bans]
+# Two versions of the same crate are a warning, not an error: tokio and its ecosystem still
+# pull windows-sys 0.52 while the agent uses 0.61, and a proc-macro dependency pulls syn 1.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
