@@ -51,10 +51,11 @@ pub fn run_agent_blocking(
     let _log_guard = logging::init(&cfg.agent_log, &cfg.log_level, interactive)
         .context("initialising logging")?;
     install_panic_hook();
-    platform::secure_file(&cfg.child_log)
-        .with_context(|| format!("securing child log {}", cfg.child_log.display()))?;
-    let protection =
-        platform::describe_protection(&cfg.child_log).context("reading child log protection")?;
+
+    // Logging exists from here on, so a bootstrap failure is logged before it propagates:
+    // in service mode there is no console and the caller only sees an SCM exit code.
+    let protection = secure_and_describe_child_log(&cfg)
+        .inspect_err(|err| tracing::error!(error = format!("{err:#}"), "bootstrap failed"))?;
 
     info!(
         mode = if interactive { "interactive" } else { "service" },
@@ -81,6 +82,13 @@ pub fn run_agent_blocking(
     runtime.shutdown_timeout(Duration::from_secs(5));
     info!("flamingo-agent stopped");
     Ok(())
+}
+
+/// Lock down the child log and report how it is protected.
+fn secure_and_describe_child_log(cfg: &Config) -> anyhow::Result<String> {
+    platform::secure_file(&cfg.child_log)
+        .with_context(|| format!("securing child log {}", cfg.child_log.display()))?;
+    platform::describe_protection(&cfg.child_log).context("reading child log protection")
 }
 
 /// Route panic messages into the log before the default hook prints them.
