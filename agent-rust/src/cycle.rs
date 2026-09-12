@@ -20,6 +20,9 @@ pub async fn run_cycle(cfg: Arc<Config>, cancel: CancellationToken) -> anyhow::R
 
 /// Run one cycle with an injected collector, so a collection failure can be exercised
 /// without the OS cooperating.
+///
+/// Exists for tests (see `tests/cycle_run.rs`); production code should call [`run_cycle`].
+#[doc(hidden)]
 pub async fn run_cycle_with<F>(
     cfg: Arc<Config>,
     cancel: CancellationToken,

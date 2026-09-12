@@ -46,6 +46,7 @@ pub enum ServiceError {
         wanted: String,
     },
     /// `--uninstall` was asked to remove a service that is not registered.
+    #[cfg(windows)]
     #[error("FlamingoAgent is not installed")]
     NotInstalled,
     /// The previous registration is still being deleted, so it cannot be recreated yet.
