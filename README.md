@@ -120,8 +120,8 @@ the child's exit codes and append-only behavior.
 
 ### Coverage and test tiers
 
-Measured line coverage is 87.78% (Linux, `cargo llvm-cov --all-targets`). CI enforces a floor
-of 84% (`floor(87.78) - 3`) on the `linux` job and publishes the full `lcov.info` as a build
+Measured line coverage is 87.68% (Linux, `cargo llvm-cov --all-targets`). CI enforces a floor
+of 84% (`floor(87.68) - 3`) on the `linux` job and publishes the full `lcov.info` as a build
 artifact, so a coverage regression fails the build rather than being noticed later.
 
 The tests fall into three tiers:
