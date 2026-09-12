@@ -254,7 +254,9 @@ jobs:
           $logs = Join-Path $env:TEMP 'interactive-logs'
           $agent = "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe"
           $child = "$env:ProgramFiles\FlamingoAgent\logger-child.exe"
-          $p = Start-Process -FilePath $agent -ArgumentList @('--log-dir', $logs, '--child-path', $child, '--period-secs', '2', '--child-timeout-secs', '1') -PassThru
+          # Start-Process joins the argument list with spaces and does not quote, and the child
+          # lives under "Program Files", so the path arguments are quoted explicitly.
+          $p = Start-Process -FilePath $agent -ArgumentList @('--log-dir', "`"$logs`"", '--child-path', "`"$child`"", '--period-secs', '2', '--child-timeout-secs', '1') -PassThru
           Start-Sleep -Seconds 7
           if ($p.HasExited) { throw "agent exited early with $($p.ExitCode)" }
           $sender = @'
