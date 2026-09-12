@@ -4,8 +4,9 @@
 //! Every test here is `#[ignore]`d so an ordinary `cargo test` stays green for an
 //! unprivileged developer; CI runs them separately with
 //! `sudo cargo test --test privileged_linux -- --ignored`. Each one also re-checks the
-//! effective uid and skips with a printed reason, so an accidental unprivileged run reports
-//! "skipped" instead of a false pass.
+//! effective uid: locally it skips with a printed reason, so an accidental unprivileged run
+//! reports "skipped" instead of a false pass; on CI (`GITHUB_ACTIONS` set) it panics instead,
+//! because a non-root CI run means the privileged setup is broken, not something to skip past.
 #![cfg(unix)]
 
 use std::fs;
@@ -20,10 +21,18 @@ use flamingo_agent::platform::{secure_dir, secure_file};
 const SHUTDOWN_GUARD: Duration = Duration::from_secs(10);
 
 /// True when the test can exercise the privileged paths; prints why it cannot otherwise.
-fn root_or_skip(test: &str) -> bool {
+///
+/// On CI (`GITHUB_ACTIONS` set) running as non-root is a configuration error, not a reason to
+/// skip silently, so this panics instead: a green CI run must mean the privileged tests
+/// actually ran as root, not that they were quietly skipped.
+fn require_root_on_ci_or_skip(test: &str) -> bool {
     // SAFETY: geteuid has no preconditions and cannot fail.
-    if unsafe { libc::geteuid() } == 0 {
+    let euid = unsafe { libc::geteuid() };
+    if euid == 0 {
         return true;
+    }
+    if std::env::var_os("GITHUB_ACTIONS").is_some() {
+        panic!("privileged tests must run as root on CI, but euid is {euid}");
     }
     eprintln!("{test}: skipped: not root");
     false
@@ -40,7 +49,7 @@ fn fixture(name: &str) -> PathBuf {
 #[test]
 #[ignore = "needs root; run with sudo cargo test --test privileged_linux -- --ignored"]
 fn secure_paths_are_root_owned_0600() {
-    if !root_or_skip("secure_paths_are_root_owned_0600") {
+    if !require_root_on_ci_or_skip("secure_paths_are_root_owned_0600") {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -70,7 +79,7 @@ fn secure_paths_are_root_owned_0600() {
 #[test]
 #[ignore = "needs root; run with sudo cargo test --test privileged_linux -- --ignored"]
 fn interactive_run_under_root_completes_two_cycles() {
-    if !root_or_skip("interactive_run_under_root_completes_two_cycles") {
+    if !require_root_on_ci_or_skip("interactive_run_under_root_completes_two_cycles") {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
