@@ -736,7 +736,7 @@ right after installing prerequisites so every checklist run starts clean.
 | M0 | Environments ready | Linux toolchain installed; VM snapshot taken |
 | M1 | **Windows spike** | A skeleton agent installs, starts, logs a heartbeat, locks one file with the SDDL policy, and stops cleanly. Checklist items 1–3, 6–9, 14 pass. Nothing portable exists yet. |
 | M2 | Portable core | Metrics, cycle, loop, child spawn/timeout, Unix secure log, logging; all §14.1–14.2 tests green on Linux; C++ child with CTest green. |
-| M3 | Integration | Elevation, install/uninstall idempotency, `install.ps1`, README; full checklist §14.4 including reboot, on a clean VM. |
+| M3 | Integration | Elevation, install/uninstall idempotency, `install.ps1`, README; the automated checklist items pass in the end-to-end CI job; the interactive items (UAC, standard-user denial, reboot) are executed on a VM in Task 19. |
 | M4 | Polish | CI workflow green on both runners; Clippy pedantic clean; `cargo doc` warnings clean; README verification section filled with real output. |
 
 M1 exists because every unknown in this project is in the Windows security and SCM layers.
@@ -774,7 +774,8 @@ in ten minutes and see the evidence without reading code.
 6. **Where the logs are and what a line looks like** — one real `agent.log` excerpt and one
    real `child.log` excerpt.
 7. **Testing** — `cargo test`, `ctest`, and the Windows checklist from §14.4 with the
-   actual output pasted for items 2, 6, 7, and 9.
+   actual output pasted for items 2, 6, and 9. Item 7 (the standard-user `runas` denial)
+   needs an interactive session and is listed as not executed, not pasted.
 8. **Verified / not verified** — verbatim from §14.6, plus a statement of what CI proves and
    does not prove (§14.5). No badge: the repository is private, so a badge would not render
    for the reviewer.

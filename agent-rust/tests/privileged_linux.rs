@@ -109,7 +109,10 @@ fn interactive_run_under_root_completes_two_cycles() {
     );
 
     let agent_log = fs::read_to_string(log_dir.join("agent.log")).unwrap();
-    let cycles = agent_log.lines().filter(|l| l.contains("metrics")).count();
+    let cycles = agent_log
+        .lines()
+        .filter(|l| l.contains(" metrics utc="))
+        .count();
     assert!(cycles >= 2, "only {cycles} metrics lines in:\n{agent_log}");
     assert!(
         agent_log.contains("flamingo-agent stopped"),

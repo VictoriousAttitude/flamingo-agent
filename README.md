@@ -164,11 +164,12 @@ Run on a clean Windows 11 or Server 2022 machine after `install.ps1`:
 
 ## Verification evidence
 
-The evidence below is the real output of the GitHub Actions `windows-service` job, which
-installs the service on a `windows-latest` runner (the runner account is an administrator)
-with `install.ps1`, lets it run, inspects it, then stops and removes it. It is not a
-hand-run VM session; the items that genuinely need one are listed as not executed at the
-end of this section.
+The evidence below is the real output of the `windows-service` job of CI run
+[34692877714](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34692877714)
+(commit `c4a9814`), which installs the service on a `windows-latest` runner (the runner
+account is an administrator) with `install.ps1`, lets it run, inspects it, then stops and
+removes it. Every block below is pasted from that one run. It is not a hand-run VM session;
+the items that genuinely need one are listed as not executed at the end of this section.
 
 **1. Registered configuration — `sc.exe qc FlamingoAgent`**
 
@@ -192,12 +193,12 @@ SERVICE_NAME: FlamingoAgent
 Five seconds apart, each with a child that reported `elevated=true`:
 
 ```
-2026-09-12T10:44:36.836118Z  INFO metrics utc=2026-09-12T10:44:36.836Z rss_bytes=12976128
-2026-09-12T10:44:36.871768Z  INFO child completed child_stdout=2026-09-12T10:44:36.836Z rss_bytes=12976128 elevated=true
-2026-09-12T10:44:41.838256Z  INFO metrics utc=2026-09-12T10:44:41.838Z rss_bytes=13524992
-2026-09-12T10:44:41.864657Z  INFO child completed child_stdout=2026-09-12T10:44:41.838Z rss_bytes=13524992 elevated=true
-2026-09-12T10:44:46.851392Z  INFO metrics utc=2026-09-12T10:44:46.851Z rss_bytes=13549568
-2026-09-12T10:44:46.878037Z  INFO child completed child_stdout=2026-09-12T10:44:46.851Z rss_bytes=13549568 elevated=true
+2026-09-12T12:13:03.927304Z  INFO metrics utc=2026-09-12T12:13:03.927Z rss_bytes=12992512
+2026-09-12T12:13:03.956636Z  INFO child completed child_stdout=2026-09-12T12:13:03.927Z rss_bytes=12992512 elevated=true
+2026-09-12T12:13:08.928670Z  INFO metrics utc=2026-09-12T12:13:08.928Z rss_bytes=13574144
+2026-09-12T12:13:08.950124Z  INFO child completed child_stdout=2026-09-12T12:13:08.928Z rss_bytes=13574144 elevated=true
+2026-09-12T12:13:13.929313Z  INFO metrics utc=2026-09-12T12:13:13.929Z rss_bytes=13590528
+2026-09-12T12:13:13.958513Z  INFO child completed child_stdout=2026-09-12T12:13:13.929Z rss_bytes=13590528 elevated=true
 ```
 
 **3. The child log's ACL — `icacls C:\ProgramData\FlamingoAgent\child.log`**
@@ -214,7 +215,7 @@ Successfully processed 1 files; Failed processing 0 files
 **4. Clean stop and uninstall**
 
 ```
-stopped in 100 ms
+stopped in 85 ms
 FlamingoAgent removed
 ```
 

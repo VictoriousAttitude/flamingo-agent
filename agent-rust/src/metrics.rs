@@ -87,9 +87,6 @@ mod tests {
         assert_eq!(format_utc(t), "2026-01-02T03:04:05.006Z");
     }
 
-    // Both RSS assertions live in one test on purpose: `memory_stats()` initialises its
-    // statics on the first call without ordering them, so two tests calling it from
-    // different threads can race and observe a zero reading.
     #[test]
     fn zero_rss_is_reported_unavailable() {
         assert!(matches!(
@@ -99,6 +96,9 @@ mod tests {
         assert_eq!(rss_bytes_from(4096).unwrap(), 4096);
     }
 
+    // Both RSS assertions live in one test on purpose: `memory_stats()` initialises its
+    // statics on the first call without ordering them, so two tests calling it from
+    // different threads can race and observe a zero reading.
     #[test]
     fn rss_is_positive_and_collect_produces_a_recent_sample() {
         assert!(rss_bytes().unwrap() > 0);
