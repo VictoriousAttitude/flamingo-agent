@@ -212,8 +212,23 @@ jobs:
             $user = 'flamingo_tester'
             $pw = 'Fl4mingo-Tester-2026!'
             $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\$user", (ConvertTo-SecureString $pw -AsPlainText -Force))
+            $effective = (Get-ItemProperty -Path $key -Name ConsentPromptBehaviorUser).ConsentPromptBehaviorUser
+            Write-Host "ConsentPromptBehaviorUser now: $effective"
             $err = Join-Path $env:TEMP 'uac-denied-stderr.txt'
-            $p = Start-Process -FilePath "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe" -ArgumentList @('--log-dir', "$env:TEMP\uac-denied-logs") -Credential $cred -WorkingDirectory $env:SystemRoot -RedirectStandardError $err -Wait -PassThru
+            $p = Start-Process -FilePath "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe" -ArgumentList @('--log-dir', "$env:TEMP\uac-denied-logs") -Credential $cred -WorkingDirectory $env:SystemRoot -RedirectStandardError $err -PassThru
+            # A refused elevation returns within a second. Anything longer means the request is
+            # blocked somewhere (a prompt that cannot be answered, or an elevated copy that was
+            # unexpectedly allowed to start), so the wait is bounded and the cause is reported.
+            if (-not $p.WaitForExit(60000)) {
+              Write-Host 'the agent did not exit within 60 s; processes named flamingo-agent:'
+              Get-CimInstance Win32_Process -Filter "Name = 'flamingo-agent.exe'" | ForEach-Object {
+                $owner = $_.GetOwner()
+                Write-Host ("  pid={0} session={1} user={2}\{3} cmd={4}" -f $_.ProcessId, $_.SessionId, $owner.Domain, $owner.User, $_.CommandLine)
+              }
+              Write-Host "stderr so far: $(Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue)"
+              taskkill /PID $p.Id /T /F | Out-Null
+              throw 'the elevation request neither completed nor was refused within 60 s'
+            }
             $text = Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue
             Write-Host "exit $($p.ExitCode): $text"
             if ($p.ExitCode -ne 3) { throw "expected exit 3 (elevation declined), got $($p.ExitCode)" }
