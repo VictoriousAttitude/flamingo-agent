@@ -10,11 +10,25 @@ use tracing::{error, info, warn};
 
 use crate::child::{self, ChildOutcome, ChildSpec};
 use crate::config::Config;
+use crate::metrics::{Metrics, MetricsError};
 use crate::{metrics, platform};
 
-/// Run one cycle.
+/// Run one cycle, sampling with [`metrics::collect`].
 pub async fn run_cycle(cfg: Arc<Config>, cancel: CancellationToken) -> anyhow::Result<()> {
-    let sample = metrics::collect().context("collecting metrics")?;
+    run_cycle_with(cfg, cancel, metrics::collect).await
+}
+
+/// Run one cycle with an injected collector, so a collection failure can be exercised
+/// without the OS cooperating.
+pub async fn run_cycle_with<F>(
+    cfg: Arc<Config>,
+    cancel: CancellationToken,
+    collect: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce() -> Result<Metrics, MetricsError>,
+{
+    let sample = collect().context("collecting metrics")?;
     info!(utc = %sample.utc_string(), rss_bytes = sample.rss_bytes, "metrics");
 
     platform::secure_file(&cfg.child_log)
