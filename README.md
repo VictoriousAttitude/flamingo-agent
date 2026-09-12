@@ -195,7 +195,9 @@ FlamingoAgent removed
 ```
 
 The job additionally asserts, and fails if not: no `logger-child` process survives the stop,
-`--uninstall` exits 0, and `Get-Service FlamingoAgent` afterwards returns nothing.
+`--uninstall` exits 0, and `Get-Service FlamingoAgent` afterwards returns nothing. A final
+step then reinstalls the service, checks it reports `RUNNING` again, and uninstalls it once
+more, so "re-running the script reinstalls cleanly" is tested rather than asserted.
 
 **Not executed yet (needs an interactive Windows session):**
 
