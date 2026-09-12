@@ -7,6 +7,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agent;
+pub mod app;
 pub mod child;
 pub mod cli;
 pub mod config;
@@ -14,3 +15,4 @@ pub mod cycle;
 pub mod logging;
 pub mod metrics;
 pub mod platform;
+pub mod service;
