@@ -461,6 +461,13 @@ mod tests {
             String::from_utf8_lossy(&denied.stdout),
             String::from_utf8_lossy(&denied.stderr)
         );
+        // Pins the precondition: a deny that stopped taking effect would send `secure_file`
+        // down the ordinary CreateFileW path, and the test would still pass while silently
+        // no longer covering the fall-through it exists for.
+        assert!(
+            std::fs::OpenOptions::new().write(true).open(&file).is_err(),
+            "write must be denied before recovery is exercised"
+        );
 
         secure_file(&file).unwrap();
         assert_file_policy(&describe_protection(&file).unwrap());
