@@ -42,5 +42,12 @@ pub enum ServiceError {
     Unsupported,
 }
 
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::{install, run_dispatcher, uninstall};
+
+#[cfg(not(windows))]
 mod unsupported;
+#[cfg(not(windows))]
 pub use unsupported::{install, run_dispatcher, uninstall};
