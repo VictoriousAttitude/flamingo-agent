@@ -61,9 +61,17 @@ function Remove-InstalledService {
         Invoke-Checked $AgentExe @('--uninstall') $InstallDir
     } else {
         # Binaries are gone but the registration remains: fall back to sc.exe.
+        # $ErrorActionPreference does not apply to native commands, so their exit
+        # codes are checked explicitly.
         sc.exe stop $ServiceName | Out-Null
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1062) {
+            throw "sc.exe stop $ServiceName failed with exit code $LASTEXITCODE"
+        }
         Start-Sleep -Seconds 2
         sc.exe delete $ServiceName | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "sc.exe delete $ServiceName failed with exit code $LASTEXITCODE"
+        }
     }
 }
 
