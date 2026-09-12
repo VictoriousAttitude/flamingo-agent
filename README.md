@@ -144,7 +144,7 @@ _Filled in after the checklist run; see below._
 
 ## Verified / not verified
 
-- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs a Linux job (rustfmt, clippy with warnings denied, unit and integration tests, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target) and a Windows job (clippy, unit and integration tests under MSVC with a static CRT, and the child's CTest suite). CI proves compilation and tests on both operating systems. It does not exercise UAC elevation or start-on-boot, which need an interactive Windows session and are covered by the checklist above.
+- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs a Linux job (rustfmt, clippy with warnings denied, unit and integration tests, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target) and a Windows job (clippy, unit and integration tests under MSVC with a static CRT, and the child's CTest suite). CI proves compilation and tests on both operating systems. It does not exercise UAC elevation or start-on-boot, which need an interactive Windows session and are covered by the checklist above. A third job installs the service through `install.ps1` on the Windows runner, verifies the registered configuration, the log output, and the exact ACL on `child.log`, then stops and uninstalls it.
 - **Linux:** unit, integration and child tests pass; an interactive run under `sudo`
   produces a root-owned `0600` log.
 - **Windows:** the checklist above, executed on a clean VM (evidence section).
