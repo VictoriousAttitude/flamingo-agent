@@ -172,7 +172,9 @@ mod tests {
             args in proptest::collection::vec("[ -~]{0,12}", 0..6)
         ) {
             let line = quote_command_line(&args.iter().map(OsString::from).collect::<Vec<_>>());
-            proptest::prop_assert_eq!(parse_command_line(&line), args);
+            proptest::prop_assert_eq!(parse_command_line(&line), args.clone());
+            #[cfg(windows)]
+            proptest::prop_assert_eq!(parse_with_windows(&line), args);
         }
     }
 
