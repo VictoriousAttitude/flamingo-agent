@@ -1,3 +1,5 @@
+# Pinned to the exact release the project is built and linted with, so a newer stable's new
+# clippy lints cannot turn a reviewer's `cargo clippy -- -D warnings` red.
 [toolchain]
-channel = "stable"
-components = ["clippy", "rustfmt"]
+channel = "1.98.1"
+components = ["clippy", "rustfmt", "llvm-tools-preview"]
