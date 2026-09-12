@@ -222,7 +222,7 @@ jobs:
             if (-not $p.WaitForExit(60000)) {
               Write-Host 'the agent did not exit within 60 s; processes named flamingo-agent:'
               Get-CimInstance Win32_Process -Filter "Name = 'flamingo-agent.exe'" | ForEach-Object {
-                $owner = $_.GetOwner()
+                $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwner
                 Write-Host ("  pid={0} session={1} user={2}\{3} cmd={4}" -f $_.ProcessId, $_.SessionId, $owner.Domain, $owner.User, $_.CommandLine)
               }
               Write-Host "stderr so far: $(Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue)"
