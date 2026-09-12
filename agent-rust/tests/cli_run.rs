@@ -51,3 +51,27 @@ fn unprivileged_run_explains_sudo_and_exits_3() {
     );
     assert!(String::from_utf8_lossy(&out.stderr).contains("sudo"));
 }
+
+#[test]
+fn version_flag_works() {
+    let out = agent().arg("--version").output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains(env!("CARGO_PKG_VERSION")), "{stdout}");
+}
+
+#[test]
+fn install_with_overrides_is_a_usage_error() {
+    // The registered service is started without arguments, so an override passed here
+    // would silently do nothing: clap must reject it.
+    let out = agent()
+        .args(["--install", "--period-secs", "7"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

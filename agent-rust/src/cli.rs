@@ -98,6 +98,26 @@ mod tests {
         assert!(cli.log_dir.is_none());
     }
 
+    /// Every flag must be discoverable from `--help`; a hidden or renamed flag is a
+    /// documentation bug the README and the manual test plan would then disagree with.
+    #[test]
+    fn help_lists_every_flag() {
+        let help = <Cli as clap::CommandFactory>::command()
+            .render_long_help()
+            .to_string();
+        for flag in [
+            "--install",
+            "--uninstall",
+            "--period-secs",
+            "--child-timeout-secs",
+            "--child-path",
+            "--log-dir",
+            "--log-level",
+        ] {
+            assert!(help.contains(flag), "{flag} is missing from:\n{help}");
+        }
+    }
+
     #[test]
     fn install_and_uninstall_flags() {
         assert_eq!(parse(&["--install"]).unwrap().command(), Command::Install);

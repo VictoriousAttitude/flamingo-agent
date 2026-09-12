@@ -66,6 +66,19 @@ mod tests {
         assert!(matches!(err, LoggingError::Filter(_)));
     }
 
+    /// A root directory has no file name, so there is nowhere to write. The check runs
+    /// before `try_init`, so this test neither installs a global subscriber nor depends on
+    /// running before the one that does.
+    #[test]
+    fn path_without_file_name_is_rejected() {
+        #[cfg(unix)]
+        let root = Path::new("/");
+        #[cfg(windows)]
+        let root = Path::new(r"C:\");
+        let err = init(root, "info", false).unwrap_err();
+        assert!(matches!(err, LoggingError::Path(_)), "{err:?}");
+    }
+
     #[test]
     fn writes_events_to_the_file() {
         let tmp = tempfile::tempdir().unwrap();
