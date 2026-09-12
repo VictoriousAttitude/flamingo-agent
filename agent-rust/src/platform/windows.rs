@@ -42,6 +42,10 @@ use super::PlatformError;
 /// File name of the child binary next to the agent executable.
 pub const CHILD_BINARY_NAME: &str = "logger-child.exe";
 
+/// Talking to the Service Control Manager needs an elevated token, so `--install` and
+/// `--uninstall` must check for one (and relaunch through UAC when it is missing).
+pub const SERVICE_MANAGEMENT_NEEDS_PRIVILEGE: bool = true;
+
 /// Protected DACL: full access for BUILTIN\Administrators and SYSTEM, nothing else,
 /// no inheritance from the parent directory (`P`).
 pub const FILE_SDDL: &str = "D:P(A;;FA;;;BA)(A;;FA;;;SY)";
@@ -129,7 +133,15 @@ impl Drop for SecurityDescriptor {
 }
 
 /// Create the directory born-locked with `DIR_SDDL`; if it already exists, re-apply the DACL.
+/// `CreateDirectoryW` only creates the leaf, so any missing parent directories are created
+/// first with their inherited permissions; only the leaf carries the protected DACL.
 pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.is_dir() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PlatformError::io("creating log directory parents", e))?;
+        }
+    }
     let descriptor = SecurityDescriptor::from_sddl(DIR_SDDL)?;
     let name = wide(path.as_os_str());
     let attributes = descriptor.attributes();

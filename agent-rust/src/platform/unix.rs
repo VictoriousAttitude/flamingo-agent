@@ -11,6 +11,10 @@ use super::PlatformError;
 /// File name of the child binary next to the agent executable.
 pub const CHILD_BINARY_NAME: &str = "logger-child";
 
+/// There is no service control manager here, so `--install`/`--uninstall` need no privilege;
+/// they report the operation as unsupported instead.
+pub const SERVICE_MANAGEMENT_NEEDS_PRIVILEGE: bool = false;
+
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
 

@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use flamingo_agent::cli::{Cli, Command};
-use flamingo_agent::{app, service};
+use flamingo_agent::{app, platform, service};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -59,7 +59,7 @@ fn run(cli: &Cli) -> u8 {
 /// Talking to the SCM needs an elevated token; on platforms without an SCM there is nothing
 /// to elevate for, and `service::install` reports Unsupported with the right exit code.
 fn privilege_for_service_management() -> Result<(), u8> {
-    if cfg!(windows) {
+    if platform::SERVICE_MANAGEMENT_NEEDS_PRIVILEGE {
         app::require_privilege()
     } else {
         Ok(())

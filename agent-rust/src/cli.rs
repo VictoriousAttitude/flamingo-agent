@@ -4,6 +4,17 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+/// Flags that configure a run of the agent itself; `--install` and `--uninstall` reject them
+/// because the registered service is started without arguments. Clap only counts explicitly
+/// passed arguments as conflicts, so the defaults below are unaffected.
+const RUNTIME_OVERRIDES: [&str; 5] = [
+    "period_secs",
+    "child_timeout_secs",
+    "child_path",
+    "log_dir",
+    "log_level",
+];
+
 /// Flamingo background agent.
 #[derive(Debug, Parser)]
 #[command(
@@ -13,11 +24,13 @@ use clap::Parser;
 )]
 pub struct Cli {
     /// Register FlamingoAgent as a Windows service with automatic start, then start it.
-    #[arg(long, conflicts_with = "uninstall")]
+    /// The runtime overrides below do not apply: the service is registered without
+    /// arguments, so passing them here would silently have no effect.
+    #[arg(long, conflicts_with = "uninstall", conflicts_with_all = RUNTIME_OVERRIDES)]
     pub install: bool,
 
     /// Stop and remove the FlamingoAgent Windows service.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = RUNTIME_OVERRIDES)]
     pub uninstall: bool,
 
     /// Seconds between collection cycles.
@@ -97,6 +110,12 @@ mod tests {
     #[test]
     fn install_and_uninstall_together_is_an_error() {
         assert!(parse(&["--install", "--uninstall"]).is_err());
+    }
+
+    #[test]
+    fn install_rejects_runtime_overrides() {
+        assert!(parse(&["--install", "--period-secs", "7"]).is_err());
+        assert!(parse(&["--uninstall", "--log-level", "debug"]).is_err());
     }
 
     #[test]
