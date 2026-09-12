@@ -651,7 +651,7 @@ Runs on every push and pull request. Three jobs, all required to pass:
 
 | Job | Runner | Steps |
 |---|---|---|
-| `linux` | `ubuntu-latest` | `cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo test` · `cmake` configure/build + `ctest` for the child · `cargo check --target x86_64-pc-windows-gnu` (compile-checks every `cfg(windows)` path) |
+| `linux` | `ubuntu-latest` | `cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo test` · privileged Linux tests under `sudo` (`cargo test --test privileged_linux -- --ignored`) · restore target ownership (`always()`, so it runs even if the previous step failed) · install `cargo-llvm-cov` · coverage lcov (`cargo llvm-cov --all-targets --lcov`) · coverage line with `--fail-under-lines 84` · upload the lcov artifact · compile-check every Windows code path (`cargo check --target x86_64-pc-windows-gnu`) · `cmake` configure/build + `ctest` for the child |
 | `windows` | `windows-latest` | `cargo clippy --all-targets -- -D warnings` · `cargo test` (MSVC, static CRT) · `cmake -A x64` build + `ctest` for the child |
 | `windows-service` | `windows-latest`, `needs: [windows]` | end-to-end run of the real service (below) |
 
@@ -702,11 +702,15 @@ The tests fall into three tiers:
    These include property-based tests of the Windows argument-quoting logic, which check
    quoting round-trips through a reference command-line parser and, on the Windows job, also
    against the real `CommandLineToArgvW`.
-2. **Privileged tests**, run only where they mean something: on Linux, a `sudo`-run job on
-   the CI runner exercises the root-owned `0600` log path and a full interactive run of the
-   agent that is stopped with `SIGINT`; on Windows, a handful of unit tests only pass under
-   an elevated runner — elevation reported `true`, DACL recovery of a file whose ACL denies
-   write, and log-directory creation when the parent directory does not yet exist.
+2. **Privileged tests**: on Linux, a `sudo`-run job on the CI runner exercises the
+   root-owned `0600` log path and a full interactive run of the agent that is stopped with
+   `SIGINT`; these now fail the build on CI if the job is not actually root, rather than
+   silently reporting `skipped`. On Windows, the DACL tests — born-locked creation,
+   replacing an inherited ACL, recovering a file whose ACL denies write, and creating
+   missing parent directories — run under any Windows account, because the test process
+   owns every file it creates; the one test that actually needs elevation,
+   `is_privileged_is_true_on_an_elevated_runner`, asserts that the CI runner's token is
+   elevated.
 3. **The end-to-end job**, which installs the real Windows service and inspects it live.
 
 Excluded by nature, because they need a live SCM or an interactive desktop session and cannot

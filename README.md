@@ -130,11 +130,15 @@ The tests fall into three tiers:
    These include property-based tests of the Windows argument-quoting logic, which check
    quoting round-trips through a reference command-line parser and, on the Windows job, also
    against the real `CommandLineToArgvW`.
-2. **Privileged tests**, run only where they mean something: on Linux, a `sudo`-run job on
-   the CI runner exercises the root-owned `0600` log path and a full interactive run of the
-   agent that is stopped with `SIGINT`; on Windows, a handful of unit tests only pass under
-   an elevated runner — elevation reported `true`, DACL recovery of a file whose ACL denies
-   write, and log-directory creation when the parent directory does not yet exist.
+2. **Privileged tests**: on Linux, a `sudo`-run job on the CI runner exercises the
+   root-owned `0600` log path and a full interactive run of the agent that is stopped with
+   `SIGINT`; these now fail the build on CI if the job is not actually root, rather than
+   silently reporting `skipped`. On Windows, the DACL tests — born-locked creation,
+   replacing an inherited ACL, recovering a file whose ACL denies write, and creating
+   missing parent directories — run under any Windows account, because the test process
+   owns every file it creates; the one test that actually needs elevation,
+   `is_privileged_is_true_on_an_elevated_runner`, asserts that the CI runner's token is
+   elevated.
 3. **The end-to-end job**, which installs the real Windows service and inspects it live.
 
 Excluded by nature, because they need a live SCM or an interactive desktop session and cannot
@@ -227,6 +231,16 @@ The job additionally asserts, and fails if not: no `logger-child` process surviv
 step then reinstalls the service, checks it reports `RUNNING` again, and uninstalls it once
 more, so "re-running the script reinstalls cleanly" is tested rather than asserted.
 
+**5. Uninstalling when nothing is installed**
+
+After the reinstall above uninstalls the service once more, `--uninstall` is run a further
+time against a service that no longer exists, exercising the `ERROR_SERVICE_DOES_NOT_EXIST`
+branch against the real SCM:
+
+```
+exit 1 : flamingo-agent: FlamingoAgent is not installed
+```
+
 **Not executed yet (needs an interactive Windows session):**
 
 - The UAC prompt on an interactive launch from a non-elevated shell (accept, decline → exit 3).
@@ -238,7 +252,7 @@ job cannot reboot the machine it runs on.
 
 ## Verified / not verified
 
-- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs a Linux job (rustfmt, clippy with warnings denied, unit and integration tests, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target) and a Windows job (clippy, unit and integration tests under MSVC with a static CRT, and the child's CTest suite). CI proves compilation and tests on both operating systems. It does not exercise UAC elevation or start-on-boot, which need an interactive Windows session and are covered by the checklist above. A third job installs the service through `install.ps1` on the Windows runner, verifies the registered configuration, the log output, and the exact ACL on `child.log`, then stops and uninstalls it.
+- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs a Linux job (rustfmt, clippy with warnings denied, unit and integration tests, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target) and a Windows job (clippy, unit and integration tests under MSVC with a static CRT, and the child's CTest suite). CI proves compilation and tests on both operating systems. It does not exercise UAC elevation or start-on-boot, which need an interactive Windows session and are covered by the checklist above. A third job installs the service through `install.ps1` on the Windows runner, verifies the registered configuration, the log output, and the exact ACL on `child.log`, then stops and uninstalls it. The Linux job also runs the root-level tests under `sudo` (failing the build if that job is not actually root) and enforces an 84% line-coverage floor via `cargo llvm-cov`.
 - **Linux:** unit, integration and child tests pass; an interactive run under `sudo`
   produces a root-owned `0600` log.
 - **Windows:** the end-to-end CI job above; the interactive-session items (UAC,
