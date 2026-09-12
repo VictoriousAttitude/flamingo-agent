@@ -69,3 +69,56 @@ jobs:
       - name: Test logger-child
         working-directory: ${{ github.workspace }}
         run: ctest --test-dir logger-child/build -C Release --output-on-failure
+
+  windows-service:
+    name: Windows service end-to-end
+    runs-on: windows-latest
+    needs: [windows]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent-rust
+      - name: Install via install.ps1
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\install.ps1
+      - name: Service configuration and state
+        shell: pwsh
+        run: |
+          $qc = sc.exe qc FlamingoAgent | Out-String
+          Write-Host $qc
+          if ($qc -notmatch 'AUTO_START') { throw 'not AUTO_START' }
+          if ($qc -notmatch 'LocalSystem') { throw 'not LocalSystem' }
+          $q = sc.exe query FlamingoAgent | Out-String
+          if ($q -notmatch 'RUNNING') { throw "not RUNNING: $q" }
+      - name: Let it run three cycles
+        shell: pwsh
+        run: Start-Sleep -Seconds 12
+      - name: Logs and ACL
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:ProgramData 'FlamingoAgent'
+          Get-Content "$dir\agent.log" | Select-Object -Last 12
+          $childLines = @(Get-Content "$dir\child.log")
+          Write-Host "child.log lines: $($childLines.Count)"
+          if ($childLines.Count -lt 2) { throw 'child.log has fewer than 2 lines' }
+          if ($childLines[-1] -notmatch 'elevated=true$') { throw "last child line: $($childLines[-1])" }
+          $acl = icacls "$dir\child.log" | Out-String
+          Write-Host $acl
+          if ($acl -notmatch 'BUILTIN\\Administrators:\(F\)') { throw 'Administrators entry missing' }
+          if ($acl -notmatch 'NT AUTHORITY\\SYSTEM:\(F\)') { throw 'SYSTEM entry missing' }
+          if ($acl -match '\(I\)') { throw 'inherited entries present' }
+          $entries = ($acl -split "`n" | Where-Object { $_ -match ':\(' }).Count
+          if ($entries -ne 2) { throw "expected exactly 2 ACEs, found $entries" }
+      - name: Stop cleanly and uninstall
+        shell: pwsh
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          Stop-Service FlamingoAgent
+          Write-Host "stopped in $($sw.ElapsedMilliseconds) ms"
+          if ($sw.Elapsed.TotalSeconds -gt 8) { throw 'stop took too long' }
+          if (Get-Process logger-child -ErrorAction SilentlyContinue) { throw 'orphan logger-child' }
+          & "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe" --uninstall
+          if ($LASTEXITCODE -ne 0) { throw "uninstall exit $LASTEXITCODE" }
+          if (Get-Service FlamingoAgent -ErrorAction SilentlyContinue) { throw 'service still registered' }
