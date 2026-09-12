@@ -10,6 +10,15 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 /// Run `cycle` every `period` until `cancel` fires. The first cycle runs immediately.
+///
+/// Cancellation is observed **between** cycles: while a cycle is in flight the loop awaits
+/// it and does not poll `cancel`, so a long or hung cycle delays shutdown until it returns.
+/// A cycle that can block (for example on a child process) must capture a clone of the same
+/// token and stop itself when it is cancelled if prompt cancellation during a cycle is
+/// required.
+///
+/// At most one cycle is ever in flight. Each cycle runs as its own task, so a cycle that
+/// returns `Err` or panics is logged and the next tick still runs.
 pub async fn run_loop<F, Fut>(period: Duration, cancel: CancellationToken, mut cycle: F)
 where
     F: FnMut() -> Fut,
