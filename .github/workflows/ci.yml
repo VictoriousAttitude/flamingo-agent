@@ -231,8 +231,8 @@ jobs:
             }
             $text = Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue
             Write-Host "exit $($p.ExitCode): $text"
-            if ($p.ExitCode -ne 3) { throw "expected exit 3 (elevation declined), got $($p.ExitCode)" }
-            if ($text -notmatch 'declined') { throw 'expected the declined message on stderr' }
+            if ($p.ExitCode -ne 3) { throw "expected exit 3 (elevation refused), got $($p.ExitCode)" }
+            if ($text -notmatch 'blocked by policy') { throw 'expected the blocked-by-policy message on stderr' }
           } finally {
             if ($null -eq $old) { Remove-ItemProperty -Path $key -Name ConsentPromptBehaviorUser -ErrorAction SilentlyContinue }
             else { Set-ItemProperty -Path $key -Name ConsentPromptBehaviorUser -Value $old -Type DWord }
