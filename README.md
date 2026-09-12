@@ -168,12 +168,12 @@ SERVICE_NAME: FlamingoAgent
 Five seconds apart, each with a child that reported `elevated=true`:
 
 ```
-2026-09-12T10:22:13.637068Z  INFO metrics utc=2026-09-12T10:22:13.637Z rss_bytes=13520896
-2026-09-12T10:22:13.662190Z  INFO child completed child_stdout=2026-09-12T10:22:13.637Z rss_bytes=13520896 elevated=true
-2026-09-12T10:22:18.645934Z  INFO metrics utc=2026-09-12T10:22:18.645Z rss_bytes=13557760
-2026-09-12T10:22:18.680329Z  INFO child completed child_stdout=2026-09-12T10:22:18.645Z rss_bytes=13557760 elevated=true
-2026-09-12T10:22:23.649067Z  INFO metrics utc=2026-09-12T10:22:23.649Z rss_bytes=13557760
-2026-09-12T10:22:23.686854Z  INFO child completed child_stdout=2026-09-12T10:22:23.649Z rss_bytes=13557760 elevated=true
+2026-09-12T10:44:36.836118Z  INFO metrics utc=2026-09-12T10:44:36.836Z rss_bytes=12976128
+2026-09-12T10:44:36.871768Z  INFO child completed child_stdout=2026-09-12T10:44:36.836Z rss_bytes=12976128 elevated=true
+2026-09-12T10:44:41.838256Z  INFO metrics utc=2026-09-12T10:44:41.838Z rss_bytes=13524992
+2026-09-12T10:44:41.864657Z  INFO child completed child_stdout=2026-09-12T10:44:41.838Z rss_bytes=13524992 elevated=true
+2026-09-12T10:44:46.851392Z  INFO metrics utc=2026-09-12T10:44:46.851Z rss_bytes=13549568
+2026-09-12T10:44:46.878037Z  INFO child completed child_stdout=2026-09-12T10:44:46.851Z rss_bytes=13549568 elevated=true
 ```
 
 **3. The child log's ACL — `icacls C:\ProgramData\FlamingoAgent\child.log`**
@@ -190,9 +190,12 @@ Successfully processed 1 files; Failed processing 0 files
 **4. Clean stop and uninstall**
 
 ```
-stopped in 2064 ms
+stopped in 100 ms
 FlamingoAgent removed
 ```
+
+The service reports `StopPending` from inside the control handler, before it starts draining,
+so `Stop-Service` sees the transition immediately instead of waiting for the SCM to poll.
 
 The job additionally asserts, and fails if not: no `logger-child` process survives the stop,
 `--uninstall` exits 0, and `Get-Service FlamingoAgent` afterwards returns nothing. A final
