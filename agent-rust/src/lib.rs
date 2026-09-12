@@ -6,6 +6,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod agent;
 pub mod child;
 pub mod cli;
 pub mod config;
