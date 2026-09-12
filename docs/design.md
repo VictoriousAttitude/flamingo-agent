@@ -645,6 +645,9 @@ Run on a fresh Windows 11 or Server 2022 VM after installing the documented prer
 | 13 | `.\install.ps1` a second time | exit 0; still one service, still RUNNING |
 | 14 | `flamingo-agent.exe --uninstall`; `sc query FlamingoAgent` | error 1060 (does not exist); no `logger-child` process |
 
+Every row except the Accept click in row 11 and the reboot in row 12 is executed by the
+`windows-service` CI job on every push (§14.5), and the README pastes its output.
+
 ### 14.5 Continuous integration (`.github/workflows/ci.yml`)
 
 Runs on every push and pull request. Three jobs, all required to pass:
@@ -665,16 +668,30 @@ is what makes the SCM and the ACL reachable from CI at all. The job:
    lines, the last ending in `elevated=true`;
 4. asserts `icacls child.log` shows exactly two ACEs (Administrators and SYSTEM, both `(F)`)
    and no inherited `(I)` entry;
-5. stops the service, requires it to return in under 8 s with no orphaned `logger-child`,
-   then uninstalls and requires the registration to be gone;
-6. **reinstalls** with `install.ps1` a second time, requires `RUNNING` again, and uninstalls
-   once more — the idempotent-reinstall claim in the README is therefore tested, not asserted.
+5. renames `logger-child.exe` away for 12 s and requires the service to stay `RUNNING` while
+   logging a spawn failure each cycle, then restores it and requires a completed cycle;
+6. creates a local standard user and, in a credentialed process, requires read, delete and
+   rename of `child.log` to be denied and the file to be intact afterwards;
+7. sets the UAC policy "automatically deny elevation requests" for standard users, launches
+   the agent as that user and requires exit code 3 with the blocked-by-policy message — the
+   agent's own `runas` relaunch, refused by the Application Information service;
+8. launches the agent interactively (the runner's token is already elevated), lets it cycle,
+   sends a real console `CTRL_C_EVENT` through a helper attached to its console, and requires
+   exit 0, the shutdown line and no surviving child;
+9. reads both binaries' import tables with `dumpbin` and requires no VC runtime, C++ standard
+   library or Universal CRT DLL;
+10. stops the service, requires it to return in under 8 s with no orphaned `logger-child`,
+    then uninstalls and requires the registration to be gone;
+11. **reinstalls** with `install.ps1` a second time, requires `RUNNING` again, uninstalls once
+    more, and finally requires `--uninstall` on the now-missing service to exit 1 with
+    "not installed" — the idempotent-reinstall claim is therefore tested, not asserted.
 
-CI now proves compilation, unit, integration, and child tests on both operating systems, plus
-service registration, the log cadence and the exact ACL on a real Windows machine. It still
-does **not** exercise UAC or start-after-reboot: a runner has no interactive desktop session
-and cannot reboot itself. Those two, and the standard-user access-denied check, stay on the
-VM checklist (§14.4) and the README lists them as not executed.
+CI therefore proves compilation, unit, integration and child tests on both operating systems,
+plus registration, cadence, the exact ACL, standard-user denial, the UAC decline path, a clean
+interactive stop and clean-machine startability on a real Windows machine. Two checklist items
+remain manual by nature: clicking Accept on the UAC consent dialog (it happens on the secure
+desktop) and an actual reboot (a hosted runner cannot restart itself). The README lists exactly
+those two as not executed.
 
 Toolchains are pinned to `stable` via `dtolnay/rust-toolchain`; the cross target is added
 with `rustup target add`. No secrets, no deployment step.
@@ -685,9 +702,10 @@ Stated verbatim in the README so the reviewer knows what was actually run:
 
 - **Linux:** unit, integration, and child tests pass; interactive run under `sudo` produces
   a root-owned `0600` log.
-- **Windows:** the `windows-service` CI job (§14.5), with its `sc qc`, `agent.log`, `icacls`
-  and stop/uninstall output pasted. The three items that need an interactive session — UAC,
-  the standard-user `runas` denial, and start-after-reboot — are listed as not executed.
+- **Windows:** the `windows-service` CI job (§14.5), with its output pasted: `sc qc`,
+  `agent.log`, `icacls`, stop/uninstall, missing-child recovery, standard-user denial, the
+  UAC decline path, the interactive Ctrl+C stop and the import-table check. The two items that
+  need a human — the UAC Accept click and an actual reboot — are listed as not executed.
 - **macOS:** compiles; not executed.
 
 ### 14.7 Coverage and tiers
@@ -713,10 +731,11 @@ The tests fall into three tiers:
    elevated.
 3. **The end-to-end job**, which installs the real Windows service and inspects it live.
 
-Excluded by nature, because they need a live SCM or an interactive desktop session and cannot
-be produced from a script: the UAC consent prompt itself, `ServiceMain` running under a real
-Service Control Manager, and the SCM's state-polling loops. These remain on the Windows VM
-checklist (§14.4).
+Not counted by the coverage figure, which is collected on Linux only: `ServiceMain` under the
+real Service Control Manager and the SCM's state-polling loops, which the end-to-end job
+(§14.5) exercises on every push but does not instrument. Two checklist items (§14.4) need a
+human at the machine and no script can perform them: clicking Accept on the UAC consent
+dialog, and an actual reboot.
 
 ---
 

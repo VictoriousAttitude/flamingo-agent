@@ -141,10 +141,11 @@ The tests fall into three tiers:
    elevated.
 3. **The end-to-end job**, which installs the real Windows service and inspects it live.
 
-Excluded by nature, because they need a live SCM or an interactive desktop session and cannot
-be produced from a script: the UAC consent prompt itself, `ServiceMain` running under a real
-Service Control Manager, and the SCM's state-polling loops. These remain on the Windows VM
-checklist below.
+Not counted by the coverage figure, which is collected on Linux only: `ServiceMain` under the
+real Service Control Manager and the SCM's state-polling loops, which the end-to-end job
+exercises on every push but does not instrument. Two checklist items need a human at the
+machine and no script can perform them: clicking Accept on the UAC consent dialog, and an
+actual reboot.
 
 ### Windows verification checklist
 
@@ -165,6 +166,9 @@ Run on a clean Windows 11 or Server 2022 machine after `install.ps1`:
 | 11 | reboot | service is RUNNING without intervention |
 | 12 | `install.ps1` again | reinstalls cleanly, still one service |
 | 13 | `flamingo-agent.exe --uninstall` | `sc query` reports the service does not exist |
+
+Every row except the Accept click in row 10 and the reboot in row 11 is executed by the
+`windows-service` CI job on every push, and its output is pasted below.
 
 ## Verification evidence
 
@@ -241,22 +245,86 @@ branch against the real SCM:
 exit 1 : flamingo-agent: FlamingoAgent is not installed
 ```
 
-**Not executed yet (needs an interactive Windows session):**
+The blocks that follow come from run
+[34706531446](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34706531446)
+(commit `9e08319`), which added the checks they document to the same job.
 
-- The UAC prompt on an interactive launch from a non-elevated shell (accept, decline → exit 3).
-- Standard-user access denial: `runas /user:tester "cmd /c type ...\child.log"` → `Access is denied.`
-- Start after a reboot (`Restart-Computer`, then `sc query FlamingoAgent` → RUNNING).
+**6. The child binary goes missing and comes back**
 
-A CI runner has no interactive desktop session, so UAC cannot be exercised there, and the
-job cannot reboot the machine it runs on.
+`logger-child.exe` is renamed away for twelve seconds and then restored. Every cycle in
+between logs the spawn failure while the service stays `RUNNING`, and the first cycle after
+the restore completes normally:
+
+```
+2026-09-12T16:56:12.569012Z  INFO metrics utc=2026-09-12T16:56:12.569Z rss_bytes=14548992
+2026-09-12T16:56:12.569768Z ERROR child could not be spawned path=C:\Program Files\FlamingoAgent\logger-child.exe error=The system cannot find the file specified. (os error 2)
+2026-09-12T16:56:17.585753Z  INFO metrics utc=2026-09-12T16:56:17.585Z rss_bytes=14553088
+2026-09-12T16:56:17.586606Z ERROR child could not be spawned path=C:\Program Files\FlamingoAgent\logger-child.exe error=The system cannot find the file specified. (os error 2)
+2026-09-12T16:56:22.599435Z  INFO metrics utc=2026-09-12T16:56:22.599Z rss_bytes=14536704
+2026-09-12T16:56:22.626088Z  INFO child completed child_stdout=2026-09-12T16:56:22.599Z rss_bytes=14536704 elevated=true
+```
+
+**7. A standard user is denied read, delete and rename**
+
+A local non-administrator account runs each operation in its own process; exit 5 is the
+probe's code for a caught access error, and the file is verified intact afterwards:
+
+```
+[read] exit 5: Access is denied
+[delete] exit 5: Access is denied
+[rename] exit 5: Access is denied
+```
+
+**8. Elevation refused by policy: the UAC decline path**
+
+With the UAC policy "automatically deny elevation requests" set for standard users, the agent
+launched from the standard account asks Windows to elevate and is refused by the Application
+Information service without any dialog:
+
+```
+ConsentPromptBehaviorUser now: 0
+exit 3: flamingo-agent: elevation is blocked by policy for this account; run from an administrator account
+```
+
+**9. Interactive run stopped with Ctrl+C**
+
+The runner account already holds an elevated token, so the interactive launch runs without a
+prompt, exactly as it does after accepting UAC. A helper attaches to the agent's console and
+sends a real `CTRL_C_EVENT`:
+
+```
+agent exit code after Ctrl+C: 0
+2026-09-12T16:57:07.389527Z  INFO metrics utc=2026-09-12T16:57:07.389Z rss_bytes=13529088
+2026-09-12T16:57:07.399904Z  INFO child completed child_stdout=2026-09-12T16:57:07.389Z rss_bytes=13529088 elevated=true
+2026-09-12T16:57:09.321428Z  INFO agent loop stopped
+2026-09-12T16:57:09.323296Z  INFO flamingo-agent stopped
+```
+
+**10. No dependency on the Visual C++ redistributable**
+
+`dumpbin /dependents` on both installed binaries lists only operating-system DLLs, which is
+what lets them start on a clean machine (the substance of the reboot check):
+
+```
+flamingo-agent.exe imports: kernel32.dll, advapi32.dll, ole32.dll, shell32.dll, api-ms-win-core-synch-l1-2-0.dll, bcryptprimitives.dll, psapi.dll, ntdll.dll
+logger-child.exe imports: KERNEL32.dll, ADVAPI32.dll
+```
+
+**Not executed (needs a human at the machine):**
+
+- Clicking Accept on the UAC consent dialog. The decline path is exercised in block 8; the
+  consent click itself happens on the secure desktop and cannot be scripted.
+- An actual reboot. A hosted runner cannot restart itself; automatic start is shown by the
+  registered `AUTO_START` configuration in block 1, and clean-machine startability by block 10.
 
 ## Verified / not verified
 
-- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs a Linux job (rustfmt, clippy with warnings denied, unit and integration tests, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target) and a Windows job (clippy, unit and integration tests under MSVC with a static CRT, and the child's CTest suite). CI proves compilation and tests on both operating systems. It does not exercise UAC elevation or start-on-boot, which need an interactive Windows session and are covered by the checklist above. A third job installs the service through `install.ps1` on the Windows runner, verifies the registered configuration, the log output, and the exact ACL on `child.log`, then stops and uninstalls it. The Linux job also runs the root-level tests under `sudo` (failing the build if that job is not actually root) and enforces an 84% line-coverage floor via `cargo llvm-cov`.
+- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs a Linux job (rustfmt, clippy with warnings denied, unit and integration tests, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target) and a Windows job (clippy, unit and integration tests under MSVC with a static CRT, and the child's CTest suite). CI proves compilation and tests on both operating systems. A third job installs the service through `install.ps1` on the Windows runner and verifies the registered configuration, the log output, the exact ACL on `child.log`, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, a clean interactive Ctrl+C stop, and that neither binary imports the VC++ runtime; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised. The Linux job also runs the root-level tests under `sudo` (failing the build if that job is not actually root) and enforces an 84% line-coverage floor via `cargo llvm-cov`.
 - **Linux:** unit, integration and child tests pass; an interactive run under `sudo`
   produces a root-owned `0600` log.
-- **Windows:** the end-to-end CI job above; the interactive-session items (UAC,
-  standard-user denial, reboot) are listed as not executed.
+- **Windows:** the end-to-end CI job above, including the standard-user denial, the UAC
+  decline path and the interactive Ctrl+C stop; only the UAC Accept click and an actual
+  reboot are listed as not executed.
 - **macOS:** compiles; not executed.
 
 ## Design notes
