@@ -30,8 +30,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
-      # Runs before the coverage steps so the instrumented run is untouched by root, and so
-      # `target/` is handed back to the runner user before anything else writes to it.
+      # Runs before the coverage steps so the instrumented run is untouched by root.
       # `sudo -E` keeps the environment but resets PATH, and rustup's shims need their two
       # home directories, so all three are passed explicitly with the defaults rustup uses.
       - name: Privileged Linux tests
@@ -40,7 +39,11 @@ jobs:
             "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" \
             "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" \
             cargo test --test privileged_linux -- --ignored --nocapture
-          sudo chown -R "$(id -u):$(id -g)" target
+      # Always runs, even if the privileged tests above fail, so `target/` is handed back to
+      # the runner user before anything else writes to it.
+      - name: Restore target ownership
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" target
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
