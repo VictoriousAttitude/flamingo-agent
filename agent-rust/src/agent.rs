@@ -75,6 +75,43 @@ mod tests {
         assert_eq!(count.load(Ordering::SeqCst), 6);
     }
 
+    /// A cycle that outlasts its period must not be joined by the next tick. Paused time
+    /// keeps this exact: `MissedTickBehavior::Delay` re-arms the interval after each late
+    /// tick, so 120 ms cycles run back-to-back and about eight of them fit in a second.
+    #[tokio::test(start_paused = true)]
+    async fn slow_cycle_never_overlaps() {
+        let in_flight = counter();
+        let max_in_flight = counter();
+        let count = counter();
+        let cancel = CancellationToken::new();
+        let stop = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            stop.cancel();
+        });
+        let (flight, max, c) = (in_flight.clone(), max_in_flight.clone(), count.clone());
+        run_loop(Duration::from_millis(50), cancel, move || {
+            let (flight, max, c) = (flight.clone(), max.clone(), c.clone());
+            async move {
+                let now = flight.fetch_add(1, Ordering::SeqCst) + 1;
+                max.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(120)).await;
+                flight.fetch_sub(1, Ordering::SeqCst);
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await;
+        assert_eq!(
+            max_in_flight.load(Ordering::SeqCst),
+            1,
+            "two cycles were in flight at once"
+        );
+        assert_eq!(in_flight.load(Ordering::SeqCst), 0);
+        let count = count.load(Ordering::SeqCst);
+        assert!(count >= 5, "only {count} cycles ran in a second");
+    }
+
     #[tokio::test]
     async fn a_failing_cycle_does_not_stop_the_loop() {
         let count = counter();
