@@ -136,6 +136,71 @@ jobs:
           if ($acl -match '\(I\)') { throw 'inherited entries present' }
           $entries = ($acl -split "`n" | Where-Object { $_ -match ':\(' }).Count
           if ($entries -ne 2) { throw "expected exactly 2 ACEs, found $entries" }
+      # Checklist row 9: with the child binary gone the service must keep running and log a
+      # spawn failure every cycle, then recover once the binary is back. Renaming a running
+      # image is allowed on Windows, but the move still retries briefly in case the file is
+      # being opened at that instant.
+      - name: Missing child binary is survived and recovered from
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:ProgramData 'FlamingoAgent'
+          $exe = "$env:ProgramFiles\FlamingoAgent\logger-child.exe"
+          $moved = "$exe.moved"
+          $before = @(Select-String -Path "$dir\agent.log" -Pattern 'child completed').Count
+          $ok = $false
+          for ($i = 0; $i -lt 10 -and -not $ok; $i++) {
+            try { Move-Item -LiteralPath $exe -Destination $moved -ErrorAction Stop; $ok = $true } catch { Start-Sleep -Milliseconds 300 }
+          }
+          if (-not $ok) { throw 'could not move logger-child.exe away' }
+          Start-Sleep -Seconds 12
+          $failures = @(Select-String -Path "$dir\agent.log" -Pattern 'child could not be spawned').Count
+          $q = sc.exe query FlamingoAgent | Out-String
+          Write-Host "spawn failures logged while the child was missing: $failures"
+          if ($failures -lt 2) { throw "expected at least 2 logged spawn failures, saw $failures" }
+          if ($q -notmatch 'RUNNING') { throw "service not RUNNING while the child was missing: $q" }
+          Move-Item -LiteralPath $moved -Destination $exe
+          Start-Sleep -Seconds 12
+          $after = @(Select-String -Path "$dir\agent.log" -Pattern 'child completed').Count
+          Write-Host "child completed: before=$before after=$after"
+          if ($after -le $before) { throw 'the service did not recover after the child binary returned' }
+          Get-Content "$dir\agent.log" | Select-Object -Last 8
+      # Checklist rows 6 and 7: a standard (non-administrator) account must be unable to read,
+      # delete or rename child.log. Each operation runs under that account in a credentialed
+      # process; a denial is exit 5 with an access-denied message, and the file must be intact
+      # afterwards. The account is removed by "Remove the test account" below, which runs even
+      # if this step fails.
+      - name: Standard user is denied read, delete and rename
+        shell: pwsh
+        run: |
+          $user = 'flamingo_tester'
+          $pw = 'Fl4mingo-Tester-2026!'
+          net user $user $pw /add /y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'could not create the test account' }
+          $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\$user", (ConvertTo-SecureString $pw -AsPlainText -Force))
+          $log = Join-Path $env:ProgramData 'FlamingoAgent\child.log'
+          $linesBefore = @(Get-Content -LiteralPath $log).Count
+          $ops = @(
+            @{ name = 'read';   cmd = "Get-Content -LiteralPath '$log' -ErrorAction Stop | Out-Null" },
+            @{ name = 'delete'; cmd = "Remove-Item -LiteralPath '$log' -ErrorAction Stop" },
+            @{ name = 'rename'; cmd = "Rename-Item -LiteralPath '$log' -NewName 'x.log' -ErrorAction Stop" }
+          )
+          foreach ($op in $ops) {
+            $out = Join-Path $env:TEMP "standard-user-$($op.name).txt"
+            $script = "try { $($op.cmd); exit 0 } catch { Write-Output `$_.Exception.Message; exit 5 }"
+            $p = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $script) -Credential $cred -WorkingDirectory $env:SystemRoot -RedirectStandardOutput $out -Wait -PassThru
+            $text = (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue)
+            Write-Host "[$($op.name)] exit $($p.ExitCode): $text"
+            if ($p.ExitCode -ne 5) { throw "standard user was not denied on $($op.name) (exit $($p.ExitCode))" }
+            if ($text -notmatch 'denied') { throw "expected an access-denied message on $($op.name)" }
+          }
+          if (-not (Test-Path -LiteralPath $log)) { throw 'child.log is gone after the denied operations' }
+          if (@(Get-Content -LiteralPath $log).Count -lt $linesBefore) { throw 'child.log lost lines' }
+      - name: Remove the test account
+        if: always()
+        shell: pwsh
+        run: |
+          net user flamingo_tester /delete 2>&1 | Out-Null
+          exit 0
       - name: Stop cleanly and uninstall
         shell: pwsh
         run: |
