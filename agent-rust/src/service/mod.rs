@@ -31,6 +31,14 @@ pub enum ServiceError {
         /// Debug rendering of the reported exit code.
         exit_code: String,
     },
+    /// Asking the service to stop failed and it never reached Stopped.
+    #[cfg(windows)]
+    #[error("stopping the service failed: {source}")]
+    StopFailed {
+        /// The underlying Service Control Manager error.
+        #[source]
+        source: windows_service::Error,
+    },
     /// The service did not reach the wanted state in time.
     #[error("timed out waiting for the service to reach {wanted}")]
     Timeout {

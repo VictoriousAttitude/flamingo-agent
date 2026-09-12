@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -11,7 +12,9 @@ use windows_service::service::{
     Service, ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl,
     ServiceExitCode, ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
 };
-use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
+use windows_service::service_control_handler::{
+    self, ServiceControlHandlerResult, ServiceStatusHandle,
+};
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, service_dispatcher};
 
@@ -58,14 +61,23 @@ fn service_main(_arguments: Vec<OsString>) {
 fn run_service() -> windows_service::Result<()> {
     let cancel = CancellationToken::new();
     let handler_cancel = cancel.clone();
+    // The handler needs the handle that `register` returns, so it captures a shared slot that
+    // is filled in immediately afterwards. `SetServiceStatus` is a cheap, non-blocking call to
+    // the SCM, so reporting StopPending from the handler keeps the "do no work here" rule.
+    let handler_status: Arc<OnceLock<ServiceStatusHandle>> = Arc::new(OnceLock::new());
+    let handler_slot = Arc::clone(&handler_status);
     let status = service_control_handler::register(SERVICE_NAME, move |control| match control {
         ServiceControl::Stop | ServiceControl::Shutdown => {
+            if let Some(handle) = handler_slot.get() {
+                let _ = handle.set_service_status(pending(ServiceState::StopPending));
+            }
             handler_cancel.cancel();
             ServiceControlHandlerResult::NoError
         }
         ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
         _ => ServiceControlHandlerResult::NotImplemented,
     })?;
+    let _ = handler_status.set(status);
 
     status.set_service_status(pending(ServiceState::StartPending))?;
 
@@ -161,7 +173,9 @@ pub fn install(exe: &Path) -> Result<(), ServiceError> {
         Err(err) => return Err(ServiceError::Api(err)),
     };
     service.set_description(SERVICE_DESCRIPTION)?;
-    if service.query_status()?.current_state != ServiceState::Running {
+    // Only a fully stopped service is started: a StartPending one is already on its way and
+    // starting it again fails with ERROR_SERVICE_ALREADY_RUNNING (1056).
+    if service.query_status()?.current_state == ServiceState::Stopped {
         service.start::<OsString>(&[])?;
     }
     wait_for_state(&service, ServiceState::Running, START_TIMEOUT)
@@ -175,8 +189,15 @@ pub fn uninstall() -> Result<(), ServiceError> {
         ServiceAccess::STOP | ServiceAccess::QUERY_STATUS | ServiceAccess::DELETE,
     )?;
     if service.query_status()?.current_state != ServiceState::Stopped {
-        let _ = service.stop();
-        wait_for_state(&service, ServiceState::Stopped, STOP_TIMEOUT)?;
+        // A failed `stop` is not fatal on its own (the service may be stopping already), but
+        // if it then never reaches Stopped the stop error is the useful diagnostic.
+        let stop_result = service.stop();
+        if let Err(wait_err) = wait_for_state(&service, ServiceState::Stopped, STOP_TIMEOUT) {
+            return match stop_result {
+                Err(source) => Err(ServiceError::StopFailed { source }),
+                Ok(_) => Err(wait_err),
+            };
+        }
     }
     service.delete()?;
     Ok(())
