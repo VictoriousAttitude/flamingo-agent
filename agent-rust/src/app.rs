@@ -113,23 +113,46 @@ pub fn require_privilege() -> Result<(), u8> {
     }
 }
 
+/// Explanation printed when the relaunch failed for a reason we cannot interpret; the
+/// error's own detail is appended to it.
+const RELAUNCH_FAILED: &str = "could not relaunch with elevation";
+
+/// Exit code for a relaunch attempt, plus the line to print on stderr (if any).
+///
+/// Pure: the whole policy of the privileged relaunch is decided here and nothing else.
+pub(crate) fn exit_code_for_relaunch(
+    result: Result<i32, PlatformError>,
+) -> (u8, Option<&'static str>) {
+    match result {
+        // An exit code the elevated run produced that we cannot reproduce in our own
+        // status byte (negative, or above 255) is reported as a plain failure.
+        Ok(code) => (u8::try_from(code).unwrap_or(EXIT_FAILURE), None),
+        Err(PlatformError::ElevationDeclined) => {
+            (EXIT_PRIVILEGE, Some("administrator approval was declined"))
+        }
+        Err(PlatformError::Unsupported(_)) => (
+            EXIT_PRIVILEGE,
+            Some("this command needs root privileges; run it with sudo"),
+        ),
+        Err(_) => (EXIT_FAILURE, Some(RELAUNCH_FAILED)),
+    }
+}
+
 fn relaunch_or_explain() -> u8 {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    match platform::relaunch_privileged(&args) {
-        Ok(code) => u8::try_from(code).unwrap_or(EXIT_FAILURE),
-        Err(PlatformError::ElevationDeclined) => {
-            eprintln!("flamingo-agent: administrator approval was declined");
-            EXIT_PRIVILEGE
+    let result = platform::relaunch_privileged(&args);
+    // The mapping consumes the result, so the error's own detail (the failing API call and
+    // its OS code) is captured first and appended to the uninterpreted-failure line.
+    let detail = result.as_ref().err().map(PlatformError::to_string);
+    let (code, message) = exit_code_for_relaunch(result);
+    match (message, detail) {
+        (Some(message), Some(detail)) if message == RELAUNCH_FAILED => {
+            eprintln!("flamingo-agent: {message}: {detail}");
         }
-        Err(PlatformError::Unsupported(_)) => {
-            eprintln!("flamingo-agent: this command needs root privileges; run it with sudo");
-            EXIT_PRIVILEGE
-        }
-        Err(err) => {
-            eprintln!("flamingo-agent: could not relaunch with elevation: {err}");
-            EXIT_FAILURE
-        }
+        (Some(message), _) => eprintln!("flamingo-agent: {message}"),
+        (None, _) => {}
     }
+    code
 }
 
 /// Run from a shell: enforce privilege, stop on Ctrl-C, report errors on stderr.
@@ -151,5 +174,55 @@ pub fn run_interactive(cli: &Cli) -> u8 {
             eprintln!("flamingo-agent: {err:#}");
             EXIT_FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn relaunch_exit_code_mapping() {
+        // The elevated run's own exit code is passed through when it fits in a u8.
+        assert_eq!(exit_code_for_relaunch(Ok(0)), (EXIT_OK, None));
+        assert_eq!(exit_code_for_relaunch(Ok(7)), (7, None));
+        assert_eq!(exit_code_for_relaunch(Ok(255)), (255, None));
+        // Codes we cannot report through our own exit status become a plain failure.
+        assert_eq!(exit_code_for_relaunch(Ok(256)), (EXIT_FAILURE, None));
+        assert_eq!(exit_code_for_relaunch(Ok(-1)), (EXIT_FAILURE, None));
+
+        let (code, message) = exit_code_for_relaunch(Err(PlatformError::ElevationDeclined));
+        assert_eq!(code, EXIT_PRIVILEGE);
+        assert!(
+            message.unwrap_or_default().contains("declined"),
+            "{message:?}"
+        );
+
+        let (code, message) =
+            exit_code_for_relaunch(Err(PlatformError::Unsupported("self-elevation")));
+        assert_eq!(code, EXIT_PRIVILEGE);
+        assert!(message.unwrap_or_default().contains("sudo"), "{message:?}");
+
+        let (code, message) = exit_code_for_relaunch(Err(PlatformError::Os {
+            call: "ShellExecuteExW",
+            code: 5,
+        }));
+        assert_eq!(code, EXIT_FAILURE);
+        assert_eq!(message, Some(RELAUNCH_FAILED));
+    }
+
+    #[test]
+    fn resolve_config_rejects_timeout_not_below_period() {
+        let cli = Cli::try_parse_from([
+            "flamingo-agent",
+            "--period-secs",
+            "4",
+            "--child-timeout-secs",
+            "4",
+        ])
+        .unwrap();
+        let err = resolve_config(&cli).unwrap_err();
+        assert!(format!("{err:#}").contains("must be shorter"), "{err:#}");
     }
 }
