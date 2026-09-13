@@ -68,6 +68,9 @@ where
             error!(path = %spec.program.display(), error = %err, "child could not be spawned");
         }
         ChildOutcome::WaitFailed(err) => error!(error = %err, "waiting for child failed"),
+        ChildOutcome::BindFailed(err) => {
+            error!(error = %err, "child could not be bound to the agent's lifetime and was killed");
+        }
     }
     Ok(())
 }

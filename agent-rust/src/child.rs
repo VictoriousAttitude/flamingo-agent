@@ -10,6 +10,7 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
 use crate::metrics::Metrics;
+use crate::platform::{self, PlatformError};
 
 /// Where the child is and how long it may run.
 #[derive(Debug, Clone)]
@@ -40,6 +41,9 @@ pub enum ChildOutcome {
     SpawnFailed(std::io::Error),
     /// The process started but waiting for it failed.
     WaitFailed(std::io::Error),
+    /// The process started but could not be bound to the agent's lifetime, so it was killed
+    /// rather than left able to outlive the agent.
+    BindFailed(PlatformError),
 }
 
 /// `--utc <ts> --rss-bytes <n> --log-file <path>`.
@@ -56,7 +60,9 @@ pub fn build_args(metrics: &Metrics, log_file: &Path) -> Vec<OsString> {
 
 /// Spawn the child with captured stdio and wait at most `spec.timeout`, or until `cancel`
 /// fires. Dropping the wait future kills the child (`kill_on_drop`), so neither a timeout nor
-/// a cancellation can leave an orphan.
+/// a cancellation can leave an orphan. The child is also bound to the agent's own lifetime
+/// through the platform layer (a job object on Windows, the parent-death signal on Linux), so
+/// a hard kill or a crash of the agent, where nothing is dropped, cannot leave one either.
 pub async fn run_child(
     spec: &ChildSpec,
     args: &[OsString],
@@ -69,11 +75,17 @@ pub async fn run_child(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    platform::prepare_child(&mut command);
 
-    let child = match command.spawn() {
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => return ChildOutcome::SpawnFailed(err),
     };
+    if let Err(err) = platform::bind_child(&child) {
+        // Unbound, the child could outlive a hard-killed agent; kill it now instead.
+        let _ = child.start_kill();
+        return ChildOutcome::BindFailed(err);
+    }
 
     tokio::select! {
         () = cancel.cancelled() => ChildOutcome::Cancelled,

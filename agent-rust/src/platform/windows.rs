@@ -5,6 +5,7 @@ use std::ffi::{c_void, OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, GENERIC_WRITE, HANDLE,
@@ -29,6 +30,11 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Com::{
     CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+};
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject, INFINITE,
@@ -297,6 +303,72 @@ pub fn is_privileged() -> Result<bool, PlatformError> {
     }
 }
 
+/// A job object configured to terminate every process in it when its last handle closes.
+struct KillOnCloseJob(HANDLE);
+
+// SAFETY: a job handle is a reference to a kernel object and may be used from any thread.
+unsafe impl Send for KillOnCloseJob {}
+// SAFETY: as above; the only operation performed through it is `AssignProcessToJobObject`.
+unsafe impl Sync for KillOnCloseJob {}
+
+fn create_kill_on_close_job() -> Result<KillOnCloseJob, (&'static str, u32)> {
+    // SAFETY: no security attributes and no name are valid arguments; the result is checked.
+    let job = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+    if job.is_null() {
+        // SAFETY: GetLastError has no preconditions.
+        return Err(("CreateJobObjectW", unsafe { GetLastError() }));
+    }
+    // SAFETY: the limit structure is plain data for which all-zero is a valid state.
+    let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: `job` is a valid handle and the buffer is exactly the size the class expects.
+    let ok = unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast::<c_void>(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    };
+    if ok == 0 {
+        // SAFETY: GetLastError has no preconditions; `job` is valid and closed exactly once.
+        let code = unsafe { GetLastError() };
+        unsafe { CloseHandle(job) };
+        return Err(("SetInformationJobObject", code));
+    }
+    Ok(KillOnCloseJob(job))
+}
+
+/// The process-wide job every child is assigned to. Its handle is deliberately never closed
+/// while the agent runs: when the agent dies for any reason, the kernel closes it and, with
+/// kill-on-close set, terminates every process still in the job.
+fn child_job() -> Result<HANDLE, PlatformError> {
+    static JOB: OnceLock<Result<KillOnCloseJob, (&'static str, u32)>> = OnceLock::new();
+    match JOB.get_or_init(create_kill_on_close_job) {
+        Ok(job) => Ok(job.0),
+        Err((call, code)) => Err(PlatformError::Os { call, code: *code }),
+    }
+}
+
+/// Nothing to arrange before the spawn on Windows: the binding happens in [`bind_child`].
+pub fn prepare_child(_command: &mut tokio::process::Command) {}
+
+/// Place the freshly spawned child in the agent's kill-on-close job, so a hard kill or a
+/// crash of the agent still terminates the child (and anything the child starts).
+pub fn bind_child(child: &tokio::process::Child) -> Result<(), PlatformError> {
+    let job = child_job()?;
+    let process = child.raw_handle().ok_or(PlatformError::Os {
+        call: "raw_handle (child already reaped)",
+        code: 0,
+    })?;
+    // SAFETY: both handles are valid; assigning a process to a job has no memory-safety
+    // preconditions.
+    if unsafe { AssignProcessToJobObject(job, process) } == 0 {
+        return Err(last_error("AssignProcessToJobObject"));
+    }
+    Ok(())
+}
+
 /// Relaunch this executable through the shell's `runas` verb (one UAC prompt), wait for the
 /// elevated instance and return its exit code. Fails with `ElevationDeclined` if the user
 /// cancels the prompt.
@@ -365,6 +437,32 @@ pub fn relaunch_privileged(args: &[OsString]) -> Result<i32, PlatformError> {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// The job is what makes a hard kill of the agent take its children with it: closing the
+    /// job's last handle must terminate a process assigned to it.
+    #[test]
+    fn job_object_kills_its_processes_when_closed() {
+        use std::os::windows::io::AsRawHandle;
+        let job = create_kill_on_close_job().unwrap();
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        // SAFETY: both handles are valid for the duration of the call.
+        let assigned = unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) };
+        assert_ne!(assigned, 0, "{}", std::io::Error::last_os_error());
+        // SAFETY: this is the only handle to the job; closing it is what triggers the kill.
+        unsafe { CloseHandle(job.0) };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while child.try_wait().unwrap().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the process survived closing its job"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
     use std::process::Command;
 
     fn assert_file_policy(sddl: &str) {

@@ -34,6 +34,41 @@ pub fn relaunch_privileged(_args: &[OsString]) -> Result<i32, PlatformError> {
     Err(PlatformError::Unsupported("self-elevation"))
 }
 
+/// Arrange for the kernel to kill the child if this process dies for any reason, including
+/// `SIGKILL` and crashes, which `kill_on_drop` cannot cover because nothing runs. On Linux
+/// the parent-death signal is armed in the child between `fork` and `exec`; other Unix
+/// targets have no equivalent and get no binding.
+pub fn prepare_child(command: &mut tokio::process::Command) {
+    #[cfg(target_os = "linux")]
+    {
+        let parent = std::process::id();
+        // SAFETY: the closure runs in the forked child before `exec` and calls only
+        // async-signal-safe functions (`prctl`, `getppid`, `_exit`).
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // The parent can die between `fork` and the `prctl` above, in which case the
+                // signal was armed too late: check, and leave rather than run unbound.
+                if libc::getppid() as u32 != parent {
+                    libc::_exit(1);
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = command;
+    }
+}
+
+/// Nothing to do after the spawn on Unix: the binding is armed by [`prepare_child`].
+pub fn bind_child(_child: &tokio::process::Child) -> Result<(), PlatformError> {
+    Ok(())
+}
+
 /// Create the directory (and parents) with mode 0700, tighten it if it already exists,
 /// and hand it to root when running as root.
 pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
