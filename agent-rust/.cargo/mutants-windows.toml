@@ -1,0 +1,28 @@
+# cargo-mutants policy for the Windows job (`cargo mutants --config .cargo/mutants-windows.toml`).
+# Only the Windows-only sources are mutated here; the portable code is covered by the Linux
+# job with .cargo/mutants.toml. Only the library's unit tests run per mutant: they are the
+# tests that exercise these files, and the integration tests would multiply the run time
+# without killing anything more.
+
+examine_globs = ["src/platform/windows.rs", "src/service/windows.rs", "src/service/eventlog.rs"]
+additional_cargo_test_args = ["--lib"]
+
+# Functions that only the end-to-end job exercises (they need the real Service Control
+# Manager, a UAC prompt, or an elevated relaunch) are excluded by name; every other mutant
+# must be killed by the unit tests.
+exclude_re = [
+    " in run_dispatcher",
+    " in service_main",
+    " in run_service",
+    " in install",
+    " in uninstall",
+    " in wait_for_state",
+    " in relaunch_privileged",
+    "replace run_dispatcher ",
+    "replace service_main ",
+    "replace run_service ",
+    "replace install ",
+    "replace uninstall ",
+    "replace wait_for_state ",
+    "replace relaunch_privileged ",
+]

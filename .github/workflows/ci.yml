@@ -152,6 +152,35 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: ctest --test-dir logger-child/build -C Release --output-on-failure
 
+  mutants-windows:
+    name: Mutation testing (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: agent-rust
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: agent-rust
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2
+        with:
+          tool: cargo-mutants
+      # The Windows-only sources, mutated on the platform that runs their tests; the policy
+      # in agent-rust/.cargo/mutants-windows.toml names the functions only the end-to-end
+      # job can exercise. Every other surviving mutant fails the build.
+      - name: cargo mutants (Windows-only sources)
+        run: cargo mutants -j 2 --config .cargo/mutants-windows.toml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: mutants-report-windows
+          path: agent-rust/mutants.out
+
   windows-service:
     name: Windows service end-to-end
     runs-on: windows-latest
