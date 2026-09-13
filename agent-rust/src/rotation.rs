@@ -268,19 +268,22 @@ mod tests {
         );
         rotate(&tmp.path().join("absent.log"), 0).unwrap();
 
+        // keep = 2 with no generation 1: the only step that can fail is removing the
+        // oldest generation, so its error must be the one reported.
         let live = tmp.path().join("child.log");
         fs::write(&live, "live").unwrap();
-        let oldest = rotated_name(&live, 1);
+        let oldest = rotated_name(&live, 2);
         fs::create_dir(&oldest).unwrap();
         fs::write(oldest.join("inner"), "x").unwrap();
         assert!(
-            rotate(&live, 1).is_err(),
+            rotate(&live, 2).is_err(),
             "the oldest generation is an unremovable directory"
         );
         assert!(
             live.exists(),
             "a failed rotation leaves the live file where it was"
         );
+        assert!(!rotated_name(&live, 1).exists());
     }
 
     /// Renaming the live file can fail for reasons other than its absence; those must
