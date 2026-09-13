@@ -5,6 +5,7 @@ use std::time::Duration;
 use flamingo_agent::config::Config;
 use flamingo_agent::cycle::{run_cycle, run_cycle_with};
 use flamingo_agent::metrics::MetricsError;
+use flamingo_agent::rotation::{rotated_name, RotationPolicy};
 use tokio_util::sync::CancellationToken;
 
 fn fixture(name: &str) -> PathBuf {
@@ -23,6 +24,10 @@ fn config(child: PathBuf, log_dir: &std::path::Path) -> Config {
         agent_log: log_dir.join("agent.log"),
         child_log: log_dir.join("child.log"),
         log_level: "info".into(),
+        log_rotation: RotationPolicy {
+            max_bytes: 1 << 20,
+            keep: 2,
+        },
     }
 }
 
@@ -133,4 +138,29 @@ async fn dacl_is_reapplied_after_the_log_is_deleted() {
         .unwrap();
     assert!(cfg.child_log.is_file(), "the log must be recreated");
     assert_protected(&cfg.child_log);
+}
+
+/// A child log that has reached the size limit is rotated between children: the old
+/// content moves to `child.1.log`, the new live file is born locked, and the child of this
+/// cycle writes into the fresh file.
+#[tokio::test]
+async fn full_child_log_is_rotated_before_the_spawn_and_the_new_one_is_locked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = config(fixture("echo_args"), tmp.path());
+    cfg.log_rotation = RotationPolicy {
+        max_bytes: 64,
+        keep: 1,
+    };
+    let old_content = "x".repeat(64);
+    std::fs::write(&cfg.child_log, &old_content).unwrap();
+    let cfg = Arc::new(cfg);
+    run_cycle(cfg.clone(), CancellationToken::new())
+        .await
+        .unwrap();
+    let rotated = rotated_name(&cfg.child_log, 1);
+    assert_eq!(std::fs::read_to_string(&rotated).unwrap(), old_content);
+    let live = std::fs::read_to_string(&cfg.child_log).unwrap();
+    assert!(!live.contains("xxxx"), "live file must be fresh: {live:?}");
+    assert_protected(&cfg.child_log);
+    assert_protected(&rotated);
 }
