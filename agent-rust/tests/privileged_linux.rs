@@ -135,6 +135,56 @@ fn interactive_run_under_root_completes_two_cycles() {
     assert_protected_dir(&log_dir);
 }
 
+/// A second agent pointed at a log directory that a running one owns must exit with code 5
+/// and say so, without writing a single line into the first agent's logs.
+#[test]
+#[ignore = "needs root; run with sudo cargo test --test privileged_linux -- --ignored"]
+fn second_agent_on_the_same_log_directory_exits_5() {
+    if !require_root_on_ci_or_skip("second_agent_on_the_same_log_directory_exits_5") {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let log_dir = tmp.path().join("logs");
+    let spawn = || {
+        Command::new(env!("CARGO_BIN_EXE_flamingo-agent"))
+            .arg("--log-dir")
+            .arg(&log_dir)
+            .arg("--child-path")
+            .arg(fixture("echo_args.sh"))
+            .args(["--period-secs", "2", "--child-timeout-secs", "1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let mut first = spawn();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(
+        first.try_wait().unwrap().is_none(),
+        "first agent exited early"
+    );
+
+    let second = spawn().wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert_eq!(second.status.code(), Some(5), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("already holds the lock"),
+        "stderr:\n{stderr}"
+    );
+
+    // SAFETY: `first` is our own unreaped child (checked above); SIGINT asks it to stop.
+    unsafe { libc::kill(first.id() as libc::pid_t, libc::SIGINT) };
+    let status = wait_with_guard(&mut first);
+    assert_eq!(status.code(), Some(0));
+    let agent_log = fs::read_to_string(log_dir.join("agent.log")).unwrap();
+    assert_eq!(
+        agent_log.matches("flamingo-agent starting").count(),
+        1,
+        "the second agent must not have written to the first one's log:\n{agent_log}"
+    );
+}
+
 /// A hard kill of the agent (`SIGKILL`, which no handler can intercept) must still take the
 /// running child with it. `kill_on_drop` cannot run in that case; only the parent-death signal
 /// armed at spawn time can. The child is the 10 s sleep fixture and the period is long, so

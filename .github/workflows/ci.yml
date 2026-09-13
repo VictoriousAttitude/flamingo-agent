@@ -163,6 +163,22 @@ jobs:
           if ($acl -match '\(I\)') { throw 'inherited entries present' }
           $entries = ($acl -split "`n" | Where-Object { $_ -match ':\(' }).Count
           if ($entries -ne 2) { throw "expected exactly 2 ACEs, found $entries" }
+      # A second agent on the service's own log directory must be refused with exit code 5,
+      # so the service and an interactive copy can never interleave writes in the same logs.
+      - name: Second instance on the same log directory is refused
+        shell: pwsh
+        run: |
+          $agent = "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe"
+          $dir = Join-Path $env:ProgramData 'FlamingoAgent'
+          $err = Join-Path $env:TEMP 'second-instance-stderr.txt'
+          $p = Start-Process -FilePath $agent -ArgumentList @('--log-dir', "`"$dir`"", '--period-secs', '30', '--child-timeout-secs', '20') -RedirectStandardError $err -PassThru
+          if (-not $p.WaitForExit(30000)) { Stop-Process -Id $p.Id -Force; throw 'the second instance did not exit' }
+          $text = Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue
+          Write-Host "exit $($p.ExitCode): $text"
+          if ($p.ExitCode -ne 5) { throw "expected exit 5, got $($p.ExitCode)" }
+          if ($text -notmatch 'already holds the lock') { throw 'expected the already-running message' }
+          $q = sc.exe query FlamingoAgent | Out-String
+          if ($q -notmatch 'RUNNING') { throw "the service was disturbed: $q" }
       # Checklist row 9: with the child binary gone the service must keep running and log a
       # spawn failure every cycle, then recover once the binary is back. Renaming a running
       # image is allowed on Windows, but the move still retries briefly in case the file is
