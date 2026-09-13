@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use flamingo_agent::platform::{secure_dir, secure_file};
+use flamingo_agent::platform::{secure_dir, secure_file, PlatformError};
 
 /// How long to wait for the agent to exit after SIGINT before declaring the test failed.
 const SHUTDOWN_GUARD: Duration = Duration::from_secs(10);
@@ -184,6 +184,39 @@ fn hard_killed_agent_takes_its_child_with_it() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// A log directory that another user created before the agent's first start must be refused,
+/// never adopted: the owner would keep the right to change its permissions back. Only root
+/// can hand a directory to another user, so this is the one place the case can be produced.
+#[test]
+#[ignore = "needs root; run with sudo cargo test --test privileged_linux -- --ignored"]
+fn foreign_owned_log_directory_is_refused() {
+    if !require_root_on_ci_or_skip("foreign_owned_log_directory_is_refused") {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let planted = tmp.path().join("planted");
+    fs::create_dir(&planted).unwrap();
+    // `nobody` on every mainstream distribution; any uid other than 0 would do.
+    std::os::unix::fs::chown(&planted, Some(65534), Some(65534)).unwrap();
+
+    let err = secure_dir(&planted).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            PlatformError::Untrusted {
+                reason: "owned by another user",
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(
+        fs::metadata(&planted).unwrap().uid(),
+        65534,
+        "ownership must not be taken"
+    );
 }
 
 /// The single child process of `pid`, according to `pgrep -P`.

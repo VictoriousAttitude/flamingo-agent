@@ -250,6 +250,36 @@ jobs:
             if ($null -eq $old) { Remove-ItemProperty -Path $key -Name ConsentPromptBehaviorUser -ErrorAction SilentlyContinue }
             else { Set-ItemProperty -Path $key -Name ConsentPromptBehaviorUser -Value $old -Type DWord }
           }
+      # Pre-planting: under ProgramData any user can create a subdirectory before the service
+      # first starts, and a junction needs no privilege at all. The standard account plants a
+      # directory it owns and a junction to a system folder; the agent, elevated, must refuse
+      # both with exit 1 rather than adopt them.
+      - name: Planted log locations are refused
+        shell: pwsh
+        run: |
+          $user = 'flamingo_tester'
+          $pw = 'Fl4mingo-Tester-2026!'
+          $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\$user", (ConvertTo-SecureString $pw -AsPlainText -Force))
+          $planted = 'C:\Users\Public\planted-logs'
+          $link = 'C:\Users\Public\planted-link'
+          $plant = Start-Process -FilePath cmd.exe -ArgumentList @('/c', "mkdir `"$planted`" && mklink /J `"$link`" C:\Windows\Temp") -Credential $cred -WorkingDirectory $env:SystemRoot -Wait -PassThru
+          if ($plant.ExitCode -ne 0) { throw "planting as the standard user failed with $($plant.ExitCode)" }
+          $agent = "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe"
+          $cases = @(
+            @{ dir = $planted; expect = 'owned by an account other than' },
+            @{ dir = $link;    expect = 'reparse point' }
+          )
+          foreach ($case in $cases) {
+            $err = Join-Path $env:TEMP "planted-$([IO.Path]::GetFileName($case.dir)).txt"
+            $p = Start-Process -FilePath $agent -ArgumentList @('--log-dir', "`"$($case.dir)`"", '--period-secs', '30', '--child-timeout-secs', '20') -RedirectStandardError $err -PassThru
+            if (-not $p.WaitForExit(30000)) { Stop-Process -Id $p.Id -Force; throw "the agent did not exit for $($case.dir)" }
+            $text = Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue
+            Write-Host "[$($case.dir)] exit $($p.ExitCode): $text"
+            if ($p.ExitCode -ne 1) { throw "expected exit 1 for $($case.dir), got $($p.ExitCode)" }
+            if ($text -notmatch 'refusing to use it' -or $text -notmatch $case.expect) { throw "expected a refusal mentioning '$($case.expect)' for $($case.dir)" }
+          }
+          cmd /c rmdir "$link" | Out-Null
+          Remove-Item -LiteralPath $planted -Recurse -Force -ErrorAction SilentlyContinue
       - name: Remove the test account
         if: always()
         shell: pwsh
