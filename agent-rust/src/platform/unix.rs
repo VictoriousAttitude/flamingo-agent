@@ -106,13 +106,13 @@ pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
         .create(path)
         .map_err(|e| PlatformError::io("creating log directory", e))?;
     fs::set_permissions(path, Permissions::from_mode(DIR_MODE))
-        .map_err(|e| PlatformError::io("setting log directory mode", e))?;
-    chown_root_if_privileged(path)
+        .map_err(|e| PlatformError::io("setting log directory mode", e))
 }
 
-/// Create the file with mode 0600 (born locked), tighten it if it already exists without
-/// touching its content, and hand it to root when running as root. An existing file that is
-/// a symbolic link or belongs to another user is refused (see [`assert_trusted_existing`]).
+/// Create the file with mode 0600 (born locked) and tighten it if it already exists without
+/// touching its content. An existing file that is a symbolic link or belongs to another user
+/// is refused (see [`assert_trusted_existing`]), so the owner is always the effective user:
+/// root when the agent runs as root.
 pub fn secure_file(path: &Path) -> Result<(), PlatformError> {
     assert_trusted_existing(path)?;
     OpenOptions::new()
@@ -122,8 +122,7 @@ pub fn secure_file(path: &Path) -> Result<(), PlatformError> {
         .open(path)
         .map_err(|e| PlatformError::io("creating child log file", e))?;
     fs::set_permissions(path, Permissions::from_mode(FILE_MODE))
-        .map_err(|e| PlatformError::io("setting child log mode", e))?;
-    chown_root_if_privileged(path)
+        .map_err(|e| PlatformError::io("setting child log mode", e))
 }
 
 /// Holds the instance lock for the process lifetime; the kernel releases it when the file
@@ -169,14 +168,6 @@ pub fn describe_protection(path: &Path) -> Result<String, PlatformError> {
         meta.uid(),
         meta.gid()
     ))
-}
-
-fn chown_root_if_privileged(path: &Path) -> Result<(), PlatformError> {
-    if is_privileged()? {
-        std::os::unix::fs::chown(path, Some(0), Some(0))
-            .map_err(|e| PlatformError::io("changing owner to root", e))?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
