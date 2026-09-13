@@ -946,7 +946,9 @@ click and an actual reboot) are listed in the README as not executed.
 The README is the reviewer's entry point; its job is to let someone reproduce the result
 in ten minutes and see the evidence without reading code.
 
-1. **What it is** — three sentences, plus the layout tree from §3.
+1. **What it is** — three sentences, plus the layout tree from §3, followed by an
+   Architecture section with three Mermaid diagrams (components and trust boundary, one
+   cycle as a sequence, the service lifecycle with failure paths) that GitHub renders inline.
 2. **Confirmed interpretations** — the table from §1, so the reviewer sees the ambiguities
    were noticed and resolved with the author, not guessed.
 3. **Prerequisites** — Rust stable (MSVC), VS Build Tools 2022 with C++ workload; nothing else.
