@@ -450,6 +450,41 @@ Application log:
 After `--uninstall` the step asserts that the registry key under
 `EventLog\Application\FlamingoAgent` no longer exists.
 
+**18. Ten-minute soak on both operating systems — `Soak` run
+[34753322091](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34753322091)**
+
+Linux, the agent under `sudo` at a 2 s period, stopped with `SIGINT`:
+
+```
+expected about 300 cycles (10 min at 2 s)
+ok   metrics lines: 301 (minimum 270)
+ok   child completed lines: 301 (minimum 270)
+ok   child.log lines: 301 (minimum 270)
+ok   malformed child.log lines: 0
+ok   child lines reporting elevated=false: 0
+ok   ERROR lines in agent.log: 0
+ok   WARN lines in agent.log: 0
+ok   RSS growth after warm-up: +0 KiB (early mean 8720 KiB, late mean 8720 KiB, max 8720 KiB, limit 2048 KiB)
+soak checks passed
+```
+
+Windows, the installed service at its registered 5 s cadence, then `Stop-Service`:
+
+```
+expected about 120 cycles (10 min at 5 s)
+ok   metrics lines: 121 (minimum 108)
+ok   child completed lines: 121 (minimum 108)
+ok   child.log lines: 121 (minimum 108)
+ok   malformed child.log lines: 0
+ok   child lines reporting elevated=false: 0
+ok   ERROR lines in agent.log: 0
+ok   WARN lines in agent.log: 0
+ok   RSS growth after warm-up: +55 KiB (early mean 13274 KiB, late mean 13329 KiB, max 13348 KiB, limit 2048 KiB)
+soak checks passed
+```
+
+Longer runs are one command away (`gh workflow run soak.yml -f minutes=60`).
+
 **Not executed (needs a human at the machine):**
 
 - Clicking Accept on the UAC consent dialog. The decline path is exercised in block 8; the
