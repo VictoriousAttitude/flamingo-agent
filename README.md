@@ -593,6 +593,28 @@ soak checks passed
 
 Longer runs are one command away (`gh workflow run soak.yml -f minutes=60`).
 
+**19. Both logs rotate by size and the rotated generations keep the lock** (run
+[34769714256](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34769714256),
+commit `b49dfb7`)
+
+An interactive agent with `--log-max-bytes 1024 --log-keep 2` at a 2 s period, killed after
+40 s. The directory listing shows two rotated generations of `agent.log` and one of
+`child.log` (about 59 bytes per child line, so 18 cycles), no third generation, and `icacls`
+on the rotated files shows only the two locked entries with nothing inherited:
+
+```
+agent.1.log       934 bytes
+agent.2.log       965 bytes
+agent.lock          0 bytes
+agent.log         872 bytes
+child.1.log      1062 bytes
+child.log         118 bytes
+C:\Users\RUNNER~1\AppData\Local\Temp\rotation-logs\agent.1.log BUILTIN\Administrators:(F)
+                                                               NT AUTHORITY\SYSTEM:(F)
+C:\Users\RUNNER~1\AppData\Local\Temp\rotation-logs\child.1.log BUILTIN\Administrators:(F)
+                                                               NT AUTHORITY\SYSTEM:(F)
+```
+
 **Not executed (needs a human at the machine):**
 
 - Clicking Accept on the UAC consent dialog. The decline path is exercised in block 8; the
