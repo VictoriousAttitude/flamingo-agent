@@ -384,11 +384,15 @@ Same shape, native primitives:
 
 | Object | Mode | Owner | Mechanism |
 |---|---|---|---|
-| directory | `0700` | `root:root` | `DirBuilder::mode(0o700)`, then `chown` |
-| `child.log` | `0600` | `root:root` | `OpenOptions::mode(0o600)` on create (born locked), then `set_permissions` + `chown` to re-apply |
+| directory | `0700` | `root:root` | `DirBuilder::mode(0o700)` |
+| `child.log` | `0600` | `root:root` | `OpenOptions::mode(0o600)` on create (born locked), then `set_permissions` to re-apply |
 
-`chown` requires root, which §4.4 already enforces. Tests that run unprivileged exercise
-mode bits against a temp dir and skip the `chown` assertion. macOS is the same code path;
+Ownership needs no `chown`: a new object belongs to the creating user, root under §4.4, and an
+existing one owned by anyone else is refused rather than taken over (see the pre-planting
+rule below), so root ownership is a consequence rather than a step. (An explicit `chown` was
+in the first version; a mutation pass showed it could not be observed by any test, which is
+what pointed out that it had become unreachable.) Tests that run unprivileged exercise mode
+bits against a temp dir; the root-level tier asserts the owner. macOS is the same code path;
 it is compiled but not exercised in this deliverable.
 
 The same pre-planting rule applies here: an existing path that is a symbolic link
@@ -658,7 +662,7 @@ exercised is named as such.
 | `child` | argv builder yields the exact expected sequence; outcome classification for exit 0 / non-zero / timeout / spawn error |
 | `cli` | `--install`, `--uninstall`, bare, and every override parse; conflicting flags rejected |
 | `config` | path resolution relative to a fake exe location |
-| `platform::unix` | on a temp dir: dir `0700`, file `0600`, re-apply fixes a `0644` file; `chown` asserted only when euid is 0 |
+| `platform::unix` | on a temp dir: dir `0700`, file `0600`, re-apply fixes a `0644` file; owner asserted by the root-level tier |
 | `platform::winquote` | a property-based test (`quoting_round_trips_through_the_reference_parser`) checks quoting round-trips through a reference command-line parser for randomly generated arguments; a fixed set of tricky arguments is additionally checked against the real `CommandLineToArgvW` on the Windows job |
 | `platform::windows` | elevation is reported `true` on the elevated CI runner (`is_privileged_is_true_on_an_elevated_runner`); a file whose ACL denies write is recovered by re-applying the DACL (`secure_file_recovers_a_file_that_denies_write`); the log directory is created when its parent does not yet exist (`secure_dir_creates_missing_parents`) |
 | `agent` | with period = 50 ms and a counting cycle: N ticks in ~N·50 ms; cancellation stops within one period; a cycle that returns `Err` does not stop the loop; a cycle that **panics** does not stop the loop |
@@ -720,13 +724,14 @@ Every row except the Accept click in row 11 and the reboot in row 12 is executed
 
 ### 14.5 Continuous integration (`.github/workflows/ci.yml`)
 
-Runs on every push and pull request. Three jobs, all required to pass:
+Runs on every push and pull request. Four jobs, all required to pass:
 
 | Job | Runner | Steps |
 |---|---|---|
 | `linux` | `ubuntu-latest` | `cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo deny check` (advisories, license allow-list, sources; policy in `deny.toml`) · `cargo audit` · `cargo test` · privileged Linux tests under `sudo` (`cargo test --test privileged_linux -- --ignored`) · restore target ownership (`always()`, so it runs even if the previous step failed) · install `cargo-llvm-cov` · coverage lcov (`cargo llvm-cov --all-targets --lcov`) · coverage line with `--fail-under-lines 84` · upload the lcov artifact · compile-check every Windows code path (`cargo check --target x86_64-pc-windows-gnu`) · `cmake` configure/build + `ctest` for the child |
 | `windows` | `windows-latest` | `cargo clippy --all-targets -- -D warnings` · `cargo test` (MSVC, static CRT) · `cmake -A x64` build + `ctest` for the child |
 | `windows-service` | `windows-latest`, `needs: [windows]` | end-to-end run of the real service (below) |
+| `mutants` | `ubuntu-latest` | `cargo mutants -j 2` with the policy in `agent-rust/.cargo/mutants.toml`; fails if any mutant of the portable or Unix code survives; uploads `mutants.out` |
 
 `windows-service` runs only after `windows` is green, so a compile or unit-test failure is
 never diagnosed as a service failure. The GitHub runner account is an administrator, which
@@ -804,6 +809,17 @@ The tests fall into three tiers:
    `is_privileged_is_true_on_an_elevated_runner`, asserts that the CI runner's token is
    elevated.
 3. **The end-to-end job**, which installs the real Windows service and inspects it live.
+
+**Mutation testing.** Coverage is necessary, not sufficient: a line can run without any
+assertion depending on it. The `mutants` job (§14.5) runs `cargo mutants` over the portable
+and Unix sources, 84 mutants in the current tree, and fails the build if one survives. The
+current pass: 72 killed, 12 unviable (they do not compile), 0 missed. Three mutants are
+excluded by name in `.cargo/mutants.toml`, each with its reason: `is_privileged` returning
+`false` and `prepare_child` doing nothing are killed only by the root-level tier, which that
+job does not run; `LOCK_EX ^ LOCK_NB` is equivalent to `LOCK_EX | LOCK_NB` because the two
+flags share no bits. The first pass left 13 alive and drove five new tests plus the removal
+of an unreachable `chown` (§6.2). The Windows-only files are not mutated; their tests run on
+the Windows job without instrumentation.
 
 Not counted by either coverage figure: `ServiceMain` under the
 real Service Control Manager and the SCM's state-polling loops, which the end-to-end job

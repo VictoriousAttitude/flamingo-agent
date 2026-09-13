@@ -168,6 +168,21 @@ exercises on every push but does not instrument. Two checklist items need a huma
 machine and no script can perform them: clicking Accept on the UAC consent dialog, and an
 actual reboot.
 
+**Mutation testing.** Line coverage says a line ran, not that a test would notice if it were
+wrong. A fourth CI job runs `cargo mutants` over the portable and Unix code (84 mutants:
+every function return replaced, every operator and match guard flipped) and fails the build
+if any mutant survives the unprivileged tiers. The current pass kills 72 and the remaining 12
+do not compile (they substitute `Default::default()` on types that have none). Three mutants
+are excluded by name in `agent-rust/.cargo/mutants.toml`, each with its reason: two are
+killed only by the root-level tier, which that job does not run (an `is_privileged` that
+lies, and a `prepare_child` that skips the parent-death signal), and one is equivalent code
+(`LOCK_EX | LOCK_NB` versus `LOCK_EX ^ LOCK_NB`, whose bits do not overlap). The first pass
+left 13 mutants alive; closing them added five tests (an in-process run of the whole
+bootstrap and loop, the panic hook, the relaunch report, the RSS floor, an inspection error
+that must not read as "not found") and removed a `chown` step that no test could observe
+because the pre-planting rule had made it unreachable. The Windows-only files are not
+mutated: their tests run on the Windows job, and an instrumented pass there was not built.
+
 **Supply chain.** The Linux job also runs `cargo audit` against the RustSec advisory database
 and `cargo deny check` with the policy in `agent-rust/deny.toml`: a known vulnerability or a
 yanked crate fails the build, every dependency license must be on an explicit allow-list
