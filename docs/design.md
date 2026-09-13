@@ -845,7 +845,7 @@ Steps added by the hardening work, in job order:
     `SERVICE_EXIT_CODE 1`, then restores the command line and requires `RUNNING` again;
 18. on the clean stop, requires the stop event (ID 2) and, after uninstall, requires the event
     source registration to be gone;
-19. runs an interactive agent with a 1 KiB rotation limit for 24 s and requires `agent.1.log`,
+19. runs an interactive agent with a 1 KiB rotation limit for 40 s and requires `agent.1.log`,
     `agent.2.log` and `child.1.log` to exist, `agent.3.log` not to (keep = 2), `icacls` on the
     rotated generations to show only the two locked entries with nothing inherited, and the
     child-log rotation to have been logged (§8).

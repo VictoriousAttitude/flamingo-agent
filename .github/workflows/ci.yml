@@ -243,16 +243,18 @@ jobs:
           if ($text -notmatch 'already holds the lock') { throw 'expected the already-running message' }
           $q = sc.exe query FlamingoAgent | Out-String
           if ($q -notmatch 'RUNNING') { throw "the service was disturbed: $q" }
-      # Both logs rotate by size and the rotated generations keep the lock: a small limit
-      # forces several rotations in 24 s, and icacls on a rotated file must show the same
-      # two entries as the live one, with nothing inherited.
+      # Both logs rotate by size and the rotated generations keep the lock: the smallest
+      # limit the CLI accepts (1 KiB) forces several agent.log rotations and one child.log
+      # rotation (about 59 bytes per cycle, so 18 cycles) in 40 s at a 2 s period, and
+      # icacls on a rotated file must show the same two entries as the live one, with
+      # nothing inherited.
       - name: Logs rotate by size and rotated files keep the lock
         shell: pwsh
         run: |
           $logs = Join-Path $env:TEMP 'rotation-logs'
           $agent = "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe"
           $p = Start-Process -FilePath $agent -ArgumentList @('--log-dir', "`"$logs`"", '--period-secs', '2', '--child-timeout-secs', '1', '--log-max-bytes', '1024', '--log-keep', '2') -PassThru
-          Start-Sleep -Seconds 24
+          Start-Sleep -Seconds 40
           if ($p.HasExited) { throw "agent exited early with $($p.ExitCode)" }
           Stop-Process -Id $p.Id -Force
           Get-ChildItem $logs | ForEach-Object { Write-Host ("{0,-14} {1,6} bytes" -f $_.Name, $_.Length) }
