@@ -865,6 +865,14 @@ The tests fall into three tiers:
    elevated.
 3. **The end-to-end job**, which installs the real Windows service and inspects it live.
 
+**Soak.** A manually started workflow (`soak.yml`) runs the real agent for N minutes on
+both operating systems (Linux: interactive under `sudo`, 2 s period, stopped with `SIGINT`;
+Windows: the installed service at its 5 s cadence) and checks the logs with
+`scripts/soak_check.py`: at least 90% of the expected cycles, every one with a completed
+child reporting `elevated=true`, no `ERROR`/`WARN` lines, and resident-memory growth between
+the post-warm-up steady state and the last tenth of the run bounded by 2 MiB. It answers the
+one question the per-push jobs cannot: whether anything drifts over hundreds of cycles.
+
 **Mutation testing.** Coverage is necessary, not sufficient: a line can run without any
 assertion depending on it. The `mutants` job (§14.5) runs `cargo mutants` over the portable
 and Unix sources, 84 mutants in the current tree, and fails the build if one survives. The

@@ -185,6 +185,18 @@ that must not read as "not found") and removed a `chown` step that no test could
 because the pre-planting rule had made it unreachable. The Windows-only files are not
 mutated: their tests run on the Windows job, and an instrumented pass there was not built.
 
+**Soak run.** A separate workflow, `Soak`, runs the real agent for a chosen number of
+minutes on both operating systems and checks the result with `scripts/soak_check.py`: the
+cadence held (at least 90% of the expected cycles), every cycle completed a child that
+reported an elevated token, no `ERROR` or `WARN` line was written, and resident memory did
+not grow by more than 2 MiB between the steady state after warm-up and the last tenth of the
+run. On Linux the agent runs under `sudo` at a 2 s period and is stopped with `SIGINT`; on
+Windows the installed service runs at its registered 5 s cadence. It is started by hand
+(`gh workflow run soak.yml -f minutes=30`, or the Actions tab) so the regular CI stays fast,
+and it uploads both logs as artifacts. The same script checks a local run: build both
+binaries, run the agent under `sudo` for a while, stop it with Ctrl-C, then point the script
+at the two logs with the minutes and period you used.
+
 **Supply chain.** The Linux job also runs `cargo audit` against the RustSec advisory database
 and `cargo deny check` with the policy in `agent-rust/deny.toml`: a known vulnerability or a
 yanked crate fails the build, every dependency license must be on an explicit allow-list
