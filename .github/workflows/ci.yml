@@ -188,7 +188,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, windows-2022]
+        # Two server generations and a Windows 11 client image (ARM64, the only hosted
+        # client image); the build follows the host architecture.
+        os: [windows-2025, windows-2022, windows-11-arm]
     runs-on: ${{ matrix.os }}
     needs: [windows]
     steps:
@@ -202,6 +204,18 @@ jobs:
       - name: Install via install.ps1
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File .\install.ps1
+      # The two installed binaries are published so the checks a hosted runner cannot
+      # perform (an actual reboot) can be done on any Windows machine without a toolchain.
+      - name: Publish the installed binaries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\binaries" | Out-Null
+          Copy-Item "$env:ProgramFiles\FlamingoAgent\*.exe" "$env:RUNNER_TEMP\binaries"
+          Get-ChildItem "$env:RUNNER_TEMP\binaries" | ForEach-Object { Write-Host ("{0,-22} {1,10} bytes" -f $_.Name, $_.Length) }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flamingo-binaries-${{ matrix.os }}
+          path: ${{ runner.temp }}\binaries\*.exe
       - name: Service configuration and state
         shell: pwsh
         run: |
@@ -525,8 +539,8 @@ jobs:
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          $dumpbin = Get-ChildItem -Path "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe | Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1 -ExpandProperty FullName
+          $vs = & $vswhere -latest -products * -property installationPath
+          $dumpbin = Get-ChildItem -Path "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe | Where-Object { $_.FullName -match 'Hostx64\\x64|Hostarm64\\arm64' } | Select-Object -First 1 -ExpandProperty FullName
           if (-not $dumpbin) { throw 'dumpbin.exe not found in the Visual Studio installation' }
           foreach ($exe in @("$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe", "$env:ProgramFiles\FlamingoAgent\logger-child.exe")) {
             $deps = & $dumpbin /nologo /dependents $exe | Out-String
