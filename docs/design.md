@@ -780,9 +780,13 @@ Stated verbatim in the README so the reviewer knows what was actually run:
 
 ### 14.7 Coverage and tiers
 
-Measured line coverage is 87.68% (Linux, `cargo llvm-cov --all-targets`). CI enforces a floor
-of 84% (`floor(87.68) - 3`) on the `linux` job and publishes the full `lcov.info` as a build
-artifact, so a coverage regression fails the build rather than being noticed later.
+Measured line coverage is 87.68% on Linux and 75.45% on Windows (`cargo llvm-cov
+--all-targets` on each job). CI enforces a floor of 84% (`floor(87.68) - 3`) on the `linux`
+job and 72% (`floor(75.45) - 3`) on the `windows` job, and publishes both lcov files as build
+artifacts, so a coverage regression fails the build rather than being noticed later. The
+Windows figure is lower because the code that only the end-to-end job exercises (the SCM
+wrapper, `ServiceMain`, installation, the UAC relaunch) is measured there but not
+instrumented: the end-to-end job runs the installed release binary, not a test build.
 
 The tests fall into three tiers:
 
@@ -801,7 +805,7 @@ The tests fall into three tiers:
    elevated.
 3. **The end-to-end job**, which installs the real Windows service and inspects it live.
 
-Not counted by the coverage figure, which is collected on Linux only: `ServiceMain` under the
+Not counted by either coverage figure: `ServiceMain` under the
 real Service Control Manager and the SCM's state-polling loops, which the end-to-end job
 (§14.5) exercises on every push but does not instrument. Two checklist items (§14.4) need a
 human at the machine and no script can perform them: clicking Accept on the UAC consent

@@ -104,7 +104,7 @@ jobs:
       - name: Coverage (lcov)
         run: cargo llvm-cov --all-targets --lcov --output-path lcov-windows.info
       - name: Coverage (line)
-        run: cargo llvm-cov report --summary-only
+        run: cargo llvm-cov report --summary-only --fail-under-lines 72
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-lcov-windows
