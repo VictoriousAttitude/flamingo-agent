@@ -168,11 +168,16 @@ source `FlamingoAgent` (`RegisterEventSourceW` / `ReportEventW`): event 1 starte
 Events 1–2 are Information, 3–5 Error. Every report is best-effort: an event log that cannot
 be written never changes what the service does. `--install` registers the source under
 `HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\FlamingoAgent` with
-`EventMessageFile = %SystemRoot%\System32\eventcreate.exe` and `TypesSupported = 7`; that
-message file's table maps IDs 1–1000 to the first insertion string, so Event Viewer shows the
-text verbatim without a message DLL of our own. `--uninstall` removes the key. Proof: the
-end-to-end job reads events 1, 2 and 3 back with `Get-WinEvent` and checks the registry
-values (§14.5).
+`EventMessageFile` pointing at the installed `flamingo-agent.exe` and `TypesSupported = 7`.
+The executable carries its own message table: `build.rs` writes a compiled `.res` resource
+(`RT_MESSAGETABLE`, IDs 1–5, each the template `%1`) and hands it to `link.exe`, which
+accepts `.res` inputs directly, so no `mc.exe`, `rc.exe` or message DLL is involved; on
+non-MSVC targets the script emits nothing. A unit test on the Windows job renders every ID
+through `FormatMessageW` from the test binary's own module (it carries the same table).
+`--uninstall` removes the key. Proof: the end-to-end job reads events 1, 2 and 3 back with
+`Get-WinEvent`, checks that the rendered text is the message itself, and checks the registry
+values (§14.5). (The first version borrowed `eventcreate.exe`'s message table, whose entries
+1–1000 are also `%1`; the embedded table removes the dependency on that file's location.)
 
 ### 4.4 Interactive mode and elevation
 
@@ -473,8 +478,9 @@ crashes. Bounded attempts keep a persistently broken deployment from restarting 
 Proof: the end-to-end job reads the configuration back with `sc qfailure` and `sc qfailureflag`.
 
 **Event source.** Before the first start, installation registers the `FlamingoAgent` event
-source (§4.3) so the very first lifecycle event renders as text; uninstallation removes the
-registration after deleting the service.
+source (§4.3) against the installed executable's own message table, so the very first
+lifecycle event renders as text; uninstallation removes the registration after deleting the
+service.
 
 `--uninstall` (elevated): open with `STOP | QUERY_STATUS | DELETE`; if running, send stop and
 poll status up to 15 s; then delete. A service marked for deletion while a handle is open is

@@ -620,8 +620,9 @@ knowing:
 7. **Lifecycle in the Application event log** — the service has no console and `agent.log`
    is readable only by administrators, so started, stopped, failed-to-start (with the error
    text), panicked and bad-arguments events go to the Application log under the source
-   `FlamingoAgent`. `--install` registers the source against a message file Windows ships,
-   so Event Viewer shows the text verbatim; `--uninstall` removes the registration. Every
+   `FlamingoAgent`. The agent's executable carries its own message table (embedded at build
+   time, no message DLL to ship), `--install` registers the source against it so Event
+   Viewer shows the text verbatim, and `--uninstall` removes the registration. Every
    report is best-effort and never changes what the service does. Proven by the end-to-end
    job, which reads the start, stop and bootstrap-failure events back with `Get-WinEvent`.
 
