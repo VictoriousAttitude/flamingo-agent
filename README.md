@@ -25,6 +25,101 @@ author and confirmed:
 | "Administrator privileges" | As a service the agent runs as LocalSystem, so the child inherits the SYSTEM token and no elevation code runs. Run from a shell, the agent self-elevates once via UAC. |
 | Cross-platform reach | Metric collection and child spawning are fully portable. On Linux/macOS the log restriction maps to a root-owned `0600` file and `--install` reports "unsupported" (systemd/launchd registration is the documented next step). |
 
+## Architecture
+
+Three views; the mechanism behind each is in [`docs/design.md`](docs/design.md) (§4 runtime
+model, §5 the cycle, §6 the secure log, §7 installation).
+
+**Components and trust boundary.** One binary, three modes. The service and everything it
+spawns run as SYSTEM; the child's log lives in a directory that only Administrators and
+SYSTEM can open, and every child is tied to the agent's lifetime through a job object.
+
+```mermaid
+flowchart LR
+    subgraph modes["flamingo-agent.exe — one binary, three modes"]
+        install["--install / --uninstall<br/>register service, recovery actions,<br/>event source"]
+        svc["service mode<br/>started by the SCM, runs as LocalSystem"]
+        inter["interactive mode<br/>self-elevates once via UAC, Ctrl-C stops"]
+    end
+    scm["Service Control Manager"] -->|"StartService"| svc
+    install -->|"CreateService, ChangeServiceConfig2"| scm
+    svc --> loop
+    inter --> loop
+    subgraph agent["agent process"]
+        loop["tick loop<br/>every 5 s, one cycle in flight,<br/>each cycle its own task"]
+        loop -->|"per cycle"| cycle["cycle<br/>sample UTC + own RSS,<br/>re-apply DACL, spawn child,<br/>bounded wait"]
+    end
+    cycle -->|"argv: --utc --rss-bytes --log-file<br/>no shell"| child["logger-child.exe<br/>C++17, static CRT,<br/>appends one line, exits"]
+    job["job object<br/>kill on close"] -. "child assigned; dies with the agent" .- child
+    subgraph logs["C:\ProgramData\FlamingoAgent — DACL: Administrators, SYSTEM only"]
+        agentlog["agent.log"]
+        childlog["child.log"]
+        lock["agent.lock<br/>one instance per directory"]
+    end
+    cycle -->|"outcome"| agentlog
+    child -->|"append"| childlog
+    svc -->|"started / stopped / failed to start"| evlog["Application event log<br/>source FlamingoAgent"]
+    scm -->|"restart 5 s, twice, then stop"| svc
+```
+
+**One cycle.** The DACL is re-applied immediately before every spawn, the child is bound to
+the agent's job object before it can do anything else, and the wait is bounded by the
+child timeout (4 s, shorter than the 5 s period) and by shutdown.
+
+```mermaid
+sequenceDiagram
+    participant L as tick loop
+    participant C as cycle task
+    participant P as platform
+    participant K as logger-child
+    participant F as child.log
+    L->>C: spawn cycle (tick)
+    C->>C: metrics: UTC now, own RSS
+    C->>P: secure_file(child.log)
+    P-->>C: DACL re-applied (or refused: reparse point / foreign owner)
+    C->>K: spawn with --utc --rss-bytes --log-file (argv, no shell)
+    C->>P: bind_child (assign to kill-on-close job)
+    K->>F: append one line "<utc> rss_bytes=<n> elevated=<bool>"
+    K-->>C: stdout line, exit 0
+    alt completed
+        C->>L: Ok — logged as "child completed"
+    else timeout, spawn failure, non-zero exit, cancelled
+        C->>K: kill (timeout) / nothing to kill
+        C->>L: Ok — logged at ERROR/WARN, the next tick still runs
+    end
+    Note over L: a cycle that returns Err or panics is logged and the loop continues
+```
+
+**Service lifecycle and failure paths.** Bootstrap is fatal only where the security
+property cannot be guaranteed; everything after the loop starts is non-fatal by
+construction. The SCM restarts a failed service twice, five seconds apart, then leaves it
+stopped, and each transition is also written to the Application event log.
+
+```mermaid
+stateDiagram-v2
+    [*] --> StartPending: SCM starts the service
+    StartPending --> Bootstrap
+    state Bootstrap {
+        [*] --> resolve_config
+        resolve_config --> secure_dir: log directory born locked
+        secure_dir --> instance_lock: agent.lock, exclusive
+        instance_lock --> file_logger
+        file_logger --> secure_child_log: child.log born locked
+        secure_child_log --> [*]
+    }
+    Bootstrap --> Running: event 1 "started"
+    Bootstrap --> Stopped_failed: refused path, planted object,
+second instance, bad arguments
+    Running --> StopPending: SCM Stop / Shutdown, or Ctrl-C
+    StopPending --> Stopped_ok: loop drains, runtime shut down (5 s bound)
+    Running --> Stopped_panic: panic caught at the boundary
+    Stopped_ok --> [*]: exit 0, event 2 "stopped"
+    Stopped_failed --> [*]: exit 1, event 3 with the error text
+    Stopped_panic --> [*]: exit 2, event 4
+    Stopped_failed --> StartPending: SCM recovery, 5 s delay, twice
+    Stopped_panic --> StartPending: SCM recovery, 5 s delay, twice
+```
+
 ## Prerequisites (Windows)
 
 - Rust stable with the default MSVC toolchain: https://rustup.rs
