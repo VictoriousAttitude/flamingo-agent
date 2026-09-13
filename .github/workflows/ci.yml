@@ -299,6 +299,29 @@ jobs:
           if (@($log | Select-String ' metrics utc=').Count -lt 2) { throw 'fewer than 2 metrics lines in the interactive run' }
           if (-not ($log -match 'flamingo-agent stopped')) { throw 'no clean shutdown line' }
           if (Get-Process logger-child -ErrorAction SilentlyContinue) { throw 'orphan logger-child after the interactive stop' }
+      # Process management: a hard kill of the agent (TerminateProcess, which runs no handler
+      # and drops nothing) must still take its running child with it. The child here is the
+      # sleep fixture, cmd.exe running ping, both of which sit in the agent's job object.
+      - name: Hard-killed agent takes its child with it
+        shell: pwsh
+        run: |
+          $logs = Join-Path $env:TEMP 'hard-kill-logs'
+          $agent = "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe"
+          $fixture = Join-Path $env:GITHUB_WORKSPACE 'agent-rust\tests\fixtures\sleep_10.cmd'
+          $p = Start-Process -FilePath $agent -ArgumentList @('--log-dir', "`"$logs`"", '--child-path', "`"$fixture`"", '--period-secs', '30', '--child-timeout-secs', '20') -PassThru
+          Start-Sleep -Seconds 3
+          if ($p.HasExited) { throw "agent exited early with $($p.ExitCode)" }
+          $before = @(Get-CimInstance Win32_Process -Filter "Name = 'PING.EXE'" | Where-Object { $_.CommandLine -match '-n 11' })
+          Write-Host "fixture ping processes before the kill: $($before.Count)"
+          if ($before.Count -lt 1) { throw 'the sleep fixture is not running under the agent' }
+          Stop-Process -Id $p.Id -Force
+          $deadline = (Get-Date).AddSeconds(3)
+          do {
+            Start-Sleep -Milliseconds 200
+            $after = @(Get-CimInstance Win32_Process -Filter "Name = 'PING.EXE'" | Where-Object { $_.CommandLine -match '-n 11' })
+          } while ($after.Count -gt 0 -and (Get-Date) -lt $deadline)
+          Write-Host "fixture ping processes after the kill: $($after.Count)"
+          if ($after.Count -gt 0) { throw 'the child outlived the hard-killed agent' }
       # The substance of checklist row 11 (start after a reboot on a clean machine): both
       # binaries must run without the Visual C++ redistributable. Their import tables are
       # read with dumpbin and must name no VC runtime, C++ standard library or Universal CRT

@@ -135,6 +135,75 @@ fn interactive_run_under_root_completes_two_cycles() {
     assert_protected_dir(&log_dir);
 }
 
+/// A hard kill of the agent (`SIGKILL`, which no handler can intercept) must still take the
+/// running child with it. `kill_on_drop` cannot run in that case; only the parent-death signal
+/// armed at spawn time can. The child is the 10 s sleep fixture and the period is long, so
+/// exactly one child is running when the agent is killed.
+#[test]
+#[ignore = "needs root; run with sudo cargo test --test privileged_linux -- --ignored"]
+fn hard_killed_agent_takes_its_child_with_it() {
+    if !require_root_on_ci_or_skip("hard_killed_agent_takes_its_child_with_it") {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let mut agent = Command::new(env!("CARGO_BIN_EXE_flamingo-agent"))
+        .arg("--log-dir")
+        .arg(tmp.path().join("logs"))
+        .arg("--child-path")
+        .arg(fixture("sleep_10.sh"))
+        .args(["--period-secs", "30", "--child-timeout-secs", "20"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(
+        agent.try_wait().unwrap().is_none(),
+        "agent exited before it was killed"
+    );
+    let child_pid = only_child_of(agent.id());
+
+    // SAFETY: `agent.id()` is our own unreaped child (checked just above), so the pid cannot
+    // have been reused; SIGKILL needs no cooperation from the target.
+    let sent = unsafe { libc::kill(agent.id() as libc::pid_t, libc::SIGKILL) };
+    assert_eq!(sent, 0, "kill failed: {}", std::io::Error::last_os_error());
+    let _ = agent.wait();
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        // SAFETY: signal 0 performs no action; it only checks whether the pid exists.
+        let alive = unsafe { libc::kill(child_pid, 0) } == 0;
+        if !alive {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "child {child_pid} outlived the hard-killed agent"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The single child process of `pid`, according to `pgrep -P`.
+fn only_child_of(pid: u32) -> libc::pid_t {
+    let out = Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+        .unwrap();
+    let pids: Vec<libc::pid_t> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+    assert_eq!(
+        pids.len(),
+        1,
+        "expected exactly one child of {pid}, got {pids:?}"
+    );
+    pids[0]
+}
+
 fn assert_protected_dir(dir: &Path) {
     let meta = fs::metadata(dir).unwrap();
     assert_eq!(meta.mode() & 0o7777, 0o700, "log directory mode");
