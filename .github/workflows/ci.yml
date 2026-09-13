@@ -182,8 +182,14 @@ jobs:
           path: agent-rust/mutants.out
 
   windows-service:
-    name: Windows service end-to-end
-    runs-on: windows-latest
+    name: Windows service end-to-end (${{ matrix.os }})
+    # The same checklist on two server generations; a failure on one image is reported on
+    # its own rather than cancelling the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
     needs: [windows]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
