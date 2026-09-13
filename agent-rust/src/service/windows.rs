@@ -196,7 +196,6 @@ fn pending(state: ServiceState) -> ServiceStatus {
 
 fn running() -> ServiceStatus {
     ServiceStatus {
-        current_state: ServiceState::Running,
         controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
         wait_hint: Duration::default(),
         ..pending(ServiceState::Running)
@@ -205,7 +204,6 @@ fn running() -> ServiceStatus {
 
 fn stopped(exit_code: ServiceExitCode) -> ServiceStatus {
     ServiceStatus {
-        current_state: ServiceState::Stopped,
         exit_code,
         wait_hint: Duration::default(),
         ..pending(ServiceState::Stopped)
