@@ -26,9 +26,8 @@ Additional decisions stated to the author and accepted:
 - The child is **C++17**, built with CMake, standard library only.
 
 **Non-goals:** log rotation, Windows Event Log integration, code signing, remote reporting,
-configuration files, a single-instance guard (running the service and an interactive copy at
-once would interleave two writers in the same logs). Each is noted in the README as a known
-limitation or next step.
+configuration files. Each is noted in the README as a known limitation or next step. (A
+single-instance guard was originally a non-goal and was added later: see §11.1, vector 18.)
 
 ---
 
@@ -540,11 +539,11 @@ integrity of the two binaries, and the availability of the service.
 | 15 | Abuse the interactive relaunch to elevate something else | The relaunch targets `current_exe()` only; refusals return an error code instead of blocking on a dialog | end-to-end UAC decline, block 8 |
 | 16 | Stop the service or edit its registration | Requires SCM `STOP`/`CHANGE_CONFIG` rights, held by administrators only (Windows semantics, not agent code) | `sc qc`, block 1 |
 | 17 | Exhaust the disk through log growth | **Not mitigated**: no rotation. Listed in README limitations | — |
-| 18 | Interleave logs by starting a second instance | **Not mitigated**: no single-instance guard. Listed in README limitations; CI's interactive runs use their own log directory | — |
+| 18 | Interleave logs by starting a second instance | An exclusive lock on `<log dir>/agent.lock` (no-share open on Windows, `flock` on Unix) is taken before the file logger opens; a second instance exits with code 5 and writes nothing | `second_instance_on_the_same_directory_is_refused` (both platforms); `second_agent_on_the_same_log_directory_exits_5` (root); end-to-end "Second instance" step |
 
-The two unmitigated rows are availability concerns for an administrator, not confidentiality
-or integrity losses to the standard user, which is why they were left as documented
-follow-ups rather than built.
+The one unmitigated row is an availability concern for an administrator, not a
+confidentiality or integrity loss to the standard user, which is why it was left as a
+documented follow-up rather than built.
 
 ### 11.2 Windows facts the design depends on
 

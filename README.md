@@ -408,8 +408,9 @@ knowing:
 - No log rotation; both logs grow unbounded.
 - No Windows Event Log integration; the SCM records service-specific exit codes in the
   System log, which covers start-up failures.
-- No single-instance guard; running the service and an interactive copy together interleaves
-  two writers.
+- One agent per log directory: a second instance pointed at a directory another agent owns
+  exits with code 5 and writes nothing (an exclusive lock on `agent.lock`, released by the
+  kernel when the holder dies). Two agents on different directories are not prevented.
 - Binaries are unsigned; SmartScreen may warn on first interactive launch.
 - Linux/macOS: `--install` is not implemented. The mapping is a systemd unit
   (`Type=simple`, `ExecStart=/opt/flamingo/flamingo-agent`, `User=root`) or a launchd
