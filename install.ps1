@@ -99,7 +99,10 @@ Write-Step 'Building flamingo-agent (cargo build --release)'
 Invoke-Checked 'cargo' @('build', '--release') $AgentDir
 
 Write-Step 'Building logger-child (CMake, Release, x64)'
-Invoke-Checked 'cmake' @('-S', $ChildDir, '-B', $ChildBuild, '-A', 'x64') $Root
+# The CMake platform follows the operating system's architecture, not the shell's: an x64
+# PowerShell running emulated on an ARM64 machine still reports the OS as Arm64.
+$Platform = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'ARM64' } else { 'x64' }
+Invoke-Checked 'cmake' @('-S', $ChildDir, '-B', $ChildBuild, '-A', $Platform) $Root
 Invoke-Checked 'cmake' @('--build', $ChildBuild, '--config', 'Release') $Root
 
 if (Test-ServiceExists) {
