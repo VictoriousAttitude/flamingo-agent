@@ -353,11 +353,19 @@ jobs:
           $agent = "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe"
           $fixture = Join-Path $env:GITHUB_WORKSPACE 'agent-rust\tests\fixtures\sleep_10.cmd'
           $p = Start-Process -FilePath $agent -ArgumentList @('--log-dir', "`"$logs`"", '--child-path', "`"$fixture`"", '--period-secs', '30', '--child-timeout-secs', '20') -PassThru
-          Start-Sleep -Seconds 3
-          if ($p.HasExited) { throw "agent exited early with $($p.ExitCode)" }
-          $before = @(Get-CimInstance Win32_Process -Filter "Name = 'PING.EXE'" | Where-Object { $_.CommandLine -match '-n 11' })
+          # The first cycle starts after bootstrap, which on a loaded runner can take a few
+          # seconds; poll instead of guessing a fixed delay. The fixture lives 10 s.
+          $deadline = (Get-Date).AddSeconds(20)
+          do {
+            Start-Sleep -Milliseconds 200
+            if ($p.HasExited) { throw "agent exited early with $($p.ExitCode)" }
+            $before = @(Get-CimInstance Win32_Process -Filter "Name = 'PING.EXE'" | Where-Object { $_.CommandLine -match '-n 11' })
+          } while ($before.Count -lt 1 -and (Get-Date) -lt $deadline)
           Write-Host "fixture ping processes before the kill: $($before.Count)"
-          if ($before.Count -lt 1) { throw 'the sleep fixture is not running under the agent' }
+          if ($before.Count -lt 1) {
+            Get-Content -LiteralPath (Join-Path $logs 'agent.log') -ErrorAction SilentlyContinue
+            throw 'the sleep fixture is not running under the agent'
+          }
           Stop-Process -Id $p.Id -Force
           $deadline = (Get-Date).AddSeconds(3)
           do {
