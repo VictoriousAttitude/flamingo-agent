@@ -38,11 +38,24 @@ fn unprivileged_run_explains_sudo_and_exits_3() {
         return; // running as root (CI containers sometimes do); the check cannot be exercised
     }
     let tmp = tempfile::tempdir().unwrap();
-    let out = agent()
+    let mut child = agent()
         .args(["--log-dir"])
         .arg(tmp.path())
-        .output()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .unwrap();
+    // An agent that ignored the privilege check would run forever; bound the wait so that
+    // failure is reported as such instead of hanging the test.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() > deadline {
+            child.kill().unwrap();
+            panic!("the unprivileged agent did not exit within 15 s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let out = child.wait_with_output().unwrap();
     assert_eq!(
         out.status.code(),
         Some(3),
