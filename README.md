@@ -336,7 +336,7 @@ logger-child.exe imports: KERNEL32.dll, ADVAPI32.dll
 
 ## Design notes
 
-See [`docs/design.md`](docs/design.md). The five points most worth knowing:
+See [`docs/design.md`](docs/design.md). The six points most worth knowing:
 
 1. **Protected DACL, directory included** — see "How the ACL is enforced".
 2. **No elevation code in service mode** — a LocalSystem service already holds the most
@@ -346,6 +346,10 @@ See [`docs/design.md`](docs/design.md). The five points most worth knowing:
 4. **Static CRT** — both binaries run on a machine without the VC++ redistributable.
 5. **Platform boundary** — every OS call lives in `platform/` or `service/`; business logic
    contains no `cfg`.
+6. **Child lifetime bound to the agent** — beyond `kill_on_drop`, which only runs on a normal
+   shutdown, every child is placed in a Windows job object with kill-on-close (on Linux, given
+   the parent-death signal), so a hard kill or a crash of the agent terminates the child too.
+   Proven by a root-level Linux test and an end-to-end CI step that kill the agent with force.
 
 ## Limitations and next steps
 

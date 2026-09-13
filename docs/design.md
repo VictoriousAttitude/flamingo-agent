@@ -283,6 +283,7 @@ Spawn details (`tokio::process::Command`):
 | stdin | null | child must never block on input |
 | stdout / stderr | piped, captured | a service has no console; output goes to the agent log |
 | `kill_on_drop(true)` | on | dropping the future on timeout kills the child |
+| lifetime binding | job object with kill-on-close (Windows); `PR_SET_PDEATHSIG` = `SIGKILL` armed before `exec` (Linux) | a hard kill or a crash of the agent, where nothing is dropped, still terminates the child; a binding failure kills the child immediately (`BindFailed`) |
 | wait | `timeout(child_timeout, wait_with_output())` | bounded, < period |
 
 Outcome classification, each logged and none fatal:
@@ -504,6 +505,13 @@ These are the facts the design depends on, stated so a reviewer can check the re
   entries with `(I)`; the graded file must show none.
 - **Delete rights.** `DELETE` on the object *or* `FILE_DELETE_CHILD` on the parent. Both are
   closed (§6.1).
+- **Child lifetime.** `kill_on_drop` only runs when the agent shuts down normally. Each child
+  is therefore also placed in a job object with kill-on-close; the job handle is held for the
+  agent's whole life, so the kernel closes it when the agent dies for any reason and terminates
+  every process still in the job, including anything the child started. On Linux the child arms
+  `PR_SET_PDEATHSIG` with `SIGKILL` between `fork` and `exec`, then re-checks its parent pid,
+  because the parent can die before the flag is set. Proof: a root-level Linux test and an
+  end-to-end CI step hard-kill the agent and assert the child is gone.
 - **Binary planting.** The child path is absolute and under `Program Files`, writable only by
   administrators. The agent never searches `PATH` and never uses a shell.
 - **Static CRT.** Both binaries link the C runtime statically (`+crt-static` for Rust,
