@@ -185,6 +185,20 @@ jobs:
           $flag = sc.exe qfailureflag FlamingoAgent | Out-String
           Write-Host $flag
           if ($flag -notmatch 'FAILURE_ACTIONS_ON_NONCRASH_FAILURES\s*:\s*TRUE') { throw 'non-crash failures are not covered' }
+      # The start must be in the Application event log, rendered as plain text (the source
+      # is registered against a message file at install time), and the registration must be
+      # exactly what --install wrote.
+      - name: Event log records the start
+        shell: pwsh
+        run: |
+          $reg = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\FlamingoAgent'
+          Write-Host "EventMessageFile = $($reg.EventMessageFile); TypesSupported = $($reg.TypesSupported)"
+          if ($reg.EventMessageFile -ne '%SystemRoot%\System32\eventcreate.exe' -or $reg.TypesSupported -ne 7) { throw 'unexpected event source registration' }
+          $ev = Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='FlamingoAgent'; Id=1} -MaxEvents 1
+          Write-Host "$($ev.TimeCreated) [$($ev.Id)] $($ev.LevelDisplayName): $($ev.Message)"
+          if ($ev.LevelDisplayName -ne 'Information') { throw "expected an Information event, got $($ev.LevelDisplayName)" }
+          if ($ev.Message -notmatch 'Flamingo Agent started; details are logged to C:\\ProgramData\\FlamingoAgent\\agent\.log') { throw 'unexpected start message' }
+          if ($ev.Message -match 'cannot be found') { throw 'the message file registration did not take effect' }
       - name: Let it run three cycles
         shell: pwsh
         run: Start-Sleep -Seconds 12
@@ -450,6 +464,37 @@ jobs:
             $bad = @($dlls | Where-Object { $_ -match '^(vcruntime|msvcp|ucrtbase|api-ms-win-crt)' })
             if ($bad.Count -gt 0) { throw "$exe depends on the VC++ runtime: $($bad -join ', ')" }
           }
+      # A bootstrap failure in service mode has no console to print to: the error must
+      # reach the Application event log. The registered command line is swapped for one the
+      # config check rejects, the service is started, and then the original is restored.
+      - name: Event log records a bootstrap failure
+        shell: pwsh
+        run: |
+          $exe = "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe"
+          Stop-Service FlamingoAgent
+          sc.exe config FlamingoAgent binPath= "`"$exe`" --period-secs 5 --child-timeout-secs 5" | Out-Null
+          sc.exe start FlamingoAgent | Out-Null
+          $deadline = (Get-Date).AddSeconds(20)
+          do {
+            Start-Sleep -Milliseconds 500
+            $ev = Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='FlamingoAgent'; Id=3} -MaxEvents 1 -ErrorAction SilentlyContinue
+          } while (-not $ev -and (Get-Date) -lt $deadline)
+          $q = sc.exe query FlamingoAgent | Out-String
+          Write-Host $q
+          if (-not $ev) { throw 'no bootstrap-failure event was recorded' }
+          Write-Host "$($ev.TimeCreated) [$($ev.Id)] $($ev.LevelDisplayName): $($ev.Message)"
+          if ($ev.LevelDisplayName -ne 'Error') { throw "expected an Error event, got $($ev.LevelDisplayName)" }
+          if ($ev.Message -notmatch 'failed to start: .*must be shorter than the period') { throw 'unexpected failure message' }
+          if ($q -notmatch 'SERVICE_EXIT_CODE\s*:\s*1') { throw 'the SCM did not record service-specific exit code 1' }
+          sc.exe config FlamingoAgent binPath= "`"$exe`"" | Out-Null
+          # The recovery policy may already be restarting it; start only if it is stopped.
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            $q = sc.exe query FlamingoAgent | Out-String
+            if ($q -match 'STOPPED') { sc.exe start FlamingoAgent | Out-Null }
+            Start-Sleep -Seconds 1
+          } while ($q -notmatch 'RUNNING' -and (Get-Date) -lt $deadline)
+          if ($q -notmatch 'RUNNING') { throw "not RUNNING after restoring the command line: $q" }
       - name: Stop cleanly and uninstall
         shell: pwsh
         run: |
@@ -458,9 +503,13 @@ jobs:
           Write-Host "stopped in $($sw.ElapsedMilliseconds) ms"
           if ($sw.Elapsed.TotalSeconds -gt 8) { throw 'stop took too long' }
           if (Get-Process logger-child -ErrorAction SilentlyContinue) { throw 'orphan logger-child' }
+          $ev = Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='FlamingoAgent'; Id=2} -MaxEvents 1
+          Write-Host "$($ev.TimeCreated) [$($ev.Id)] $($ev.LevelDisplayName): $($ev.Message)"
+          if ($ev.Message -notmatch 'Flamingo Agent stopped on request') { throw 'unexpected stop message' }
           & "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe" --uninstall
           if ($LASTEXITCODE -ne 0) { throw "uninstall exit $LASTEXITCODE" }
           if (Get-Service FlamingoAgent -ErrorAction SilentlyContinue) { throw 'service still registered' }
+          if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\FlamingoAgent') { throw 'event source registration was not removed' }
       - name: Reinstall is idempotent
         shell: pwsh
         run: |
