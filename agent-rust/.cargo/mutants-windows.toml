@@ -25,4 +25,25 @@ exclude_re = [
     "replace uninstall ",
     "replace wait_for_state ",
     "replace relaunch_privileged ",
+    # Only an unelevated process can tell a lying is_privileged apart; the end-to-end job
+    # runs the agent as a standard user and requires exit 3.
+    "replace is_privileged -> Result<bool, PlatformError> with Ok\\(true\\)",
+    # Equivalent: defensive double-checks on API contracts (`ok == 0 || ptr.is_null()` and
+    # the like); the two sides never differ for a real Win32 call.
+    "replace \\|\\| with && in SecurityDescriptor::from_sddl",
+    "replace \\|\\| with && in SecurityDescriptor::dacl",
+    "replace \\|\\| with && in assert_trusted_existing",
+    "replace \\|\\| with && in describe_protection",
+    # Equivalent: create_dir_all is idempotent, the guard only saves a call.
+    "replace && with \\|\\| in secure_dir",
+    # Equivalent: the OR-ed flags share no bits, so ^ produces the same value; and the
+    # create handle in secure_file is closed on the next line, so its share mode is
+    # unobservable.
+    "replace \\| with & in secure_file",
+    "replace \\| with \\^ in secure_file",
+    "replace \\| with \\^ in apply_dacl",
+    "replace \\| with \\^ in running",
+    # Unobservable: a skipped LocalFree / DeregisterEventSource is a leak, not a behaviour.
+    "replace <impl Drop for SecurityDescriptor>::drop with \\(\\)",
+    "replace <impl Drop for EventSource>::drop with \\(\\)",
 ]
