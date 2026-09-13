@@ -310,14 +310,23 @@ mod tests {
         );
     }
 
-    /// A size check that fails for a reason other than "not found" (here a path below a
-    /// regular file) is an error, not "nothing to rotate".
+    /// A size check that fails for a reason other than "not found" is an error, not
+    /// "nothing to rotate". On Unix a path below a regular file fails with ENOTDIR; Windows
+    /// reports that case as "path not found", so there the probe is a name Windows rejects
+    /// outright (a double quote is not allowed in file names).
     #[test]
     fn size_check_errors_other_than_not_found_are_reported() {
         let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join("file");
-        fs::write(&file, "x").unwrap();
-        assert!(rotate_if_large(&file.join("child.log"), &policy(10, 1)).is_err());
+        #[cfg(unix)]
+        let probe = {
+            let file = tmp.path().join("file");
+            fs::write(&file, "x").unwrap();
+            file.join("child.log")
+        };
+        #[cfg(windows)]
+        let probe = tmp.path().join("bad\"name.log");
+        let err = rotate_if_large(&probe, &policy(10, 1)).unwrap_err();
+        assert_ne!(err.kind(), io::ErrorKind::NotFound, "{err}");
     }
 
     #[test]
