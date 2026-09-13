@@ -44,7 +44,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 The script builds `flamingo-agent` (`cargo build --release`) and `logger-child` (CMake,
 Release, x64), copies both to `C:\Program Files\FlamingoAgent\`, registers the
 `FlamingoAgent` service (automatic start, LocalSystem) via `flamingo-agent.exe --install`,
-starts it, and prints its status. Re-running the script reinstalls cleanly.
+starts it, and prints its status. Re-running the script reinstalls cleanly. The registration
+includes recovery actions: if the service fails, the SCM restarts it after five seconds, twice,
+then leaves it stopped, and a non-zero exit is treated like a crash so a transient start-up
+failure recovers on its own. CI reads this back with `sc qfailure`.
 
 To remove: `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall`
 (or `flamingo-agent.exe --uninstall`). Logs are kept.

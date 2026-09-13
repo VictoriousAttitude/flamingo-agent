@@ -433,6 +433,14 @@ reports `Running`. If it reaches `Stopped` instead, print the service-specific e
 exists (`ERROR_SERVICE_EXISTS`, 1073) the agent opens it and updates its configuration to
 the same values, so re-running `install.ps1` is safe.
 
+**Recovery.** Installation also registers failure actions with the SCM
+(`ChangeServiceConfig2` through `update_failure_actions`): restart after 5 s, restart after
+5 s again, then stop; the attempt counter resets after a failure-free day. The
+"failure actions on non-crash failures" flag is set, so a service that exits with a
+service-specific code (a transient bootstrap failure) is retried the same way as one that
+crashes. Bounded attempts keep a persistently broken deployment from restarting forever.
+Proof: the end-to-end job reads the configuration back with `sc qfailure` and `sc qfailureflag`.
+
 `--uninstall` (elevated): open with `STOP | QUERY_STATUS | DELETE`; if running, send stop and
 poll status up to 15 s; then delete. A service marked for deletion while a handle is open is
 removed when the last handle closes; the agent closes its handle immediately.
