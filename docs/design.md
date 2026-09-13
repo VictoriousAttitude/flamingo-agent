@@ -56,8 +56,11 @@ vector 18 and §4.3.)
 ```
 .
 ├── agent-rust/                  Rust crate (lib + thin bin), package `flamingo-agent`
-│   ├── Cargo.toml
+│   ├── Cargo.toml, Cargo.lock
+│   ├── rust-toolchain.toml      pinned toolchain (1.98.1) and components
+│   ├── deny.toml                cargo-deny policy: advisories, license allow-list, sources
 │   ├── .cargo/config.toml       static CRT for *-windows-msvc
+│   ├── .cargo/mutants.toml      cargo-mutants policy: Windows-only files and named exclusions
 │   ├── src/
 │   │   ├── main.rs              parse CLI → dispatch (install | uninstall | run)
 │   │   ├── lib.rs               module tree; everything below is testable from tests/
@@ -67,25 +70,34 @@ vector 18 and §4.3.)
 │   │   ├── metrics.rs           UTC timestamp + own RSS                        [portable]
 │   │   ├── cycle.rs             one collection cycle: collect → log → spawn     [portable]
 │   │   ├── agent.rs             the tick loop + cancellation                   [portable]
-│   │   ├── child.rs             argv building, spawn, timeout, outcome         [portable]
+│   │   ├── child.rs             argv building, spawn, bind, timeout, outcome   [portable]
 │   │   ├── logging.rs           tracing setup (file + optional stderr)         [portable]
 │   │   ├── platform/
 │   │   │   ├── mod.rs           `#[cfg]` selects one impl; single shared signature set
-│   │   │   ├── windows.rs       secure_log (SDDL), is_elevated, relaunch_elevated, paths
+│   │   │   ├── windows.rs       DACLs, pre-planting checks, job object, instance lock,
+│   │   │   │                    elevation check and UAC relaunch, paths
 │   │   │   ├── winquote.rs      Windows command-line quoting for the UAC relaunch
-│   │   │   └── unix.rs          secure_log (0600 root), is_elevated (euid 0), paths
+│   │   │   └── unix.rs          0700/0600 + owner checks, flock, PDEATHSIG, euid, paths
 │   │   └── service/
 │   │       ├── mod.rs           `#[cfg]` selects; errors shared by both impls
 │   │       ├── unsupported.rs   non-Windows stub: install/uninstall report Unsupported
-│   │       └── windows.rs       dispatcher, ServiceMain, control handler, install/uninstall
-│   └── tests/                   integration tests using fixture children
+│   │       ├── windows.rs       dispatcher, ServiceMain, control handler, install/uninstall,
+│   │       │                    recovery policy
+│   │       └── eventlog.rs      Application event log source: report, register, unregister
+│   └── tests/                   integration tests using fixture children (tests/fixtures/):
+│                                app_run, child_spawn, cli_run, cycle_run, metrics_first_call,
+│                                privileged_linux (root-level, `#[ignore]`)
 ├── logger-child/                C++17 child, CMake, CTest
 │   ├── CMakeLists.txt
-│   └── src/main.cpp
+│   ├── src/main.cpp
+│   └── tests/*.cmake            append, default path, exit codes, expected elevation
+├── scripts/soak_check.py        checks a soak run's logs (cadence, outcomes, RSS growth)
 ├── install.ps1                  build both, install into Program Files, register service
-├── README.md
+├── README.md                    build, install, evidence, architecture diagrams
 ├── docs/design.md               this document
-└── .github/workflows/ci.yml     Ubuntu + Windows: fmt, clippy, cargo test, ctest, cross-check
+└── .github/workflows/
+    ├── ci.yml                   four jobs: Linux, mutation testing, Windows, Windows service end-to-end
+    └── soak.yml                 manually started long run on both operating systems
 ```
 
 **Platform boundary rule.** `platform/mod.rs` exposes one set of function signatures; the
