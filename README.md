@@ -158,7 +158,7 @@ From a non-elevated shell this triggers one UAC prompt; the elevated instance ru
 loop in its own console window and stops on Ctrl-C. Declining the prompt exits with code 3.
 
 Useful flags: `--period-secs`, `--child-timeout-secs`, `--child-path`, `--log-dir`,
-`--log-level`. Run `flamingo-agent.exe --help` for details.
+`--log-level`, `--log-max-bytes`, `--log-keep`. Run `flamingo-agent.exe --help` for details.
 
 ## Logs
 
@@ -181,6 +181,15 @@ start-up:
 
 The `elevated=` field is the child's own report of its token, so the "launched with
 administrator privileges" requirement is visible in the data, not just asserted here.
+
+**Rotation.** Both logs rotate by size: when a file reaches `--log-max-bytes` (default
+10 MiB) it becomes `agent.1.log` or `child.1.log`, older generations shift up, and the one
+past `--log-keep` (default 5) is deleted, so each log occupies at most six times the limit.
+`agent.log` rotates inside the agent's own writer, between lines; `child.log` rotates between
+children, so no writer ever holds the file being renamed. A rename preserves the security
+descriptor, so rotated generations stay locked exactly like the live file, and the fresh
+live file is born locked. A rotation that fails (a viewer holding the file open without
+delete sharing) is logged and retried on the next line or cycle; it never stops the agent.
 
 ## How the ACL is enforced
 
@@ -604,9 +613,8 @@ Longer runs are one command away (`gh workflow run soak.yml -f minutes=60`).
 ## Design notes
 
 See [`docs/design.md`](docs/design.md). Its §11.1 is the threat model: the attacker
-considered, eighteen vectors, the mitigation for each, and the test or CI step that proves it,
-including the one vector that is deliberately not mitigated. The seven points most worth
-knowing:
+considered, eighteen vectors, and for each the mitigation and the test or CI step that proves
+it. The seven points most worth knowing:
 
 1. **Protected DACL, directory included** — see "How the ACL is enforced".
 2. **No elevation code in service mode** — a LocalSystem service already holds the most
@@ -631,7 +639,8 @@ knowing:
 
 ## Limitations and next steps
 
-- No log rotation; both logs grow unbounded.
+- Rotation is by size only; there is no time-based schedule and no compression of rotated
+  generations.
 - One agent per log directory: a second instance pointed at a directory another agent owns
   exits with code 5 and writes nothing (an exclusive lock on `agent.lock`, released by the
   kernel when the holder dies). Two agents on different directories are not prevented.

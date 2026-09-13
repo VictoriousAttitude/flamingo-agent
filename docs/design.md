@@ -495,18 +495,34 @@ Both commands print one human-readable line on success and map SCM errors to mes
 
 `tracing` with two layers:
 
-- **File layer** (always): `tracing-appender` non-blocking writer to `agent.log`, compact
-  format, UTC timestamps, no ANSI. The `WorkerGuard` is held until the very end of shutdown
-  so the final lines are flushed.
+- **File layer** (always): `tracing-appender`'s non-blocking worker in front of the agent's
+  own size-rotating writer (`rotation::RotatingWriter`) for `agent.log`, compact format, UTC
+  timestamps, no ANSI. The `WorkerGuard` is held until the very end of shutdown so the final
+  lines are flushed.
 - **stderr layer** (interactive only): same events, human-friendly.
 
 Default level INFO; `--log-level` overrides. Logged at INFO every cycle: the metrics line
 (§5.2) and the child outcome (§5.3). Logged once at start: resolved config, effective SDDL
 (§6.1), service/interactive mode.
 
-`agent.log` lives in the locked directory and inherits its protection (§6.1); it is not
-part of the graded ACL requirement but there is no reason to leave it open.
+`agent.log` lives in the locked directory and is created born locked like `child.log`
+(§6.1); it is not part of the graded ACL requirement but there is no reason to leave it open.
 
+**Rotation (`rotation.rs`, portable).** Both logs rotate by size, bounded by
+`--log-max-bytes` (default 10 MiB) and `--log-keep` generations (default 5): the live file
+is renamed to `<stem>.1.log`, older generations shift up, the one past `keep` is deleted, so
+a log occupies at most `(keep + 1) × max_bytes`. `agent.log` rotates inside the writer,
+before a line that would exceed the limit, so lines never straddle generations; `child.log`
+is checked at the start of every cycle after `secure_file` (so a planted object is refused
+before anything is renamed) and rotated between children, when no writer holds it, followed
+by a second `secure_file` that creates the fresh live file born locked. A rename preserves
+the security descriptor on both platforms, so rotated generations stay locked. Rotation is
+best-effort: a failed rename (a viewer holding the file without delete sharing) keeps the
+current file and is retried on the next line or cycle. Proof: unit tests on the shifting,
+the threshold and the writer (no line straddles a rotation, nothing is lost); an integration
+test that a full `child.log` is rotated before the spawn and both files are protected; and
+an end-to-end step that forces rotations with a 1 KiB limit and checks `icacls` on the
+rotated generations.
 ---
 
 ## 9. Error handling policy
@@ -580,12 +596,11 @@ integrity of the two binaries, and the availability of the service.
 | 14 | Crash the agent through a bug in a cycle | Each cycle is its own task; a panic is logged and the loop continues; the SCM restarts the service after a real crash | `a_panicking_cycle_does_not_stop_the_loop`; `sc qfailure` end-to-end step |
 | 15 | Abuse the interactive relaunch to elevate something else | The relaunch targets `current_exe()` only; refusals return an error code instead of blocking on a dialog | end-to-end UAC decline, block 8 |
 | 16 | Stop the service or edit its registration | Requires SCM `STOP`/`CHANGE_CONFIG` rights, held by administrators only (Windows semantics, not agent code) | `sc qc`, block 1 |
-| 17 | Exhaust the disk through log growth | **Not mitigated**: no rotation. Listed in README limitations | — |
+| 17 | Exhaust the disk through log growth | Size-based rotation with a bounded number of generations (§8): at most `(keep + 1) × max_bytes` per log, 60 MiB each by default | `rotation` unit tests; `full_child_log_is_rotated_before_the_spawn_and_the_new_one_is_locked`; end-to-end "Logs rotate by size" step |
 | 18 | Interleave logs by starting a second instance | An exclusive lock on `<log dir>/agent.lock` (no-share open on Windows, `flock` on Unix) is taken before the file logger opens; a second instance exits with code 5 and writes nothing | `second_instance_on_the_same_directory_is_refused` (both platforms); `second_agent_on_the_same_log_directory_exits_5` (root); end-to-end "Second instance" step |
 
-The one unmitigated row is an availability concern for an administrator, not a
-confidentiality or integrity loss to the standard user, which is why it was left as a
-documented follow-up rather than built.
+Every row is mitigated; rows 17 and 18 were documented follow-ups in the first version and
+were built afterwards.
 
 ### 11.2 Windows facts the design depends on
 
@@ -829,7 +844,11 @@ Steps added by the hardening work, in job order:
     requires the bootstrap-failure event (ID 3, Error, with the error text) and
     `SERVICE_EXIT_CODE 1`, then restores the command line and requires `RUNNING` again;
 18. on the clean stop, requires the stop event (ID 2) and, after uninstall, requires the event
-    source registration to be gone.
+    source registration to be gone;
+19. runs an interactive agent with a 1 KiB rotation limit for 24 s and requires `agent.1.log`,
+    `agent.2.log` and `child.1.log` to exist, `agent.3.log` not to (keep = 2), `icacls` on the
+    rotated generations to show only the two locked entries with nothing inherited, and the
+    child-log rotation to have been logged (§8).
 
 CI therefore proves compilation, unit, integration and child tests on both operating systems,
 plus registration, cadence, the exact ACL, standard-user denial, the UAC decline path, a clean
