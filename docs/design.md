@@ -904,7 +904,7 @@ right after installing prerequisites so every checklist run starts clean.
 | M0 | Environments ready | Linux toolchain installed; VM snapshot taken |
 | M1 | **Windows spike** | A skeleton agent installs, starts, logs a heartbeat, locks one file with the SDDL policy, and stops cleanly. Checklist items 1–3, 6–9, 14 pass. Nothing portable exists yet. |
 | M2 | Portable core | Metrics, cycle, loop, child spawn/timeout, Unix secure log, logging; all §14.1–14.2 tests green on Linux; C++ child with CTest green. |
-| M3 | Integration | Elevation, install/uninstall idempotency, `install.ps1`, README; the automated checklist items pass in the end-to-end CI job; the interactive items (UAC, standard-user denial, reboot) are executed on a VM in Task 19. |
+| M3 | Integration | Elevation, install/uninstall idempotency, `install.ps1`, README; the automated checklist items pass in the end-to-end CI job; the interactive items (UAC, standard-user denial, reboot) are executed on a VM. |
 | M4 | Polish | CI workflow green on both runners; Clippy clean with warnings denied (`unwrap`/`expect` additionally denied outside tests; the pedantic group was considered and not adopted); `cargo doc` warnings clean; README verification section filled with real output. |
 
 M1 exists because every unknown in this project is in the Windows security and SCM layers.

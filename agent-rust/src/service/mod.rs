@@ -1,4 +1,4 @@
-//! Service Control Manager integration. Windows gets the real implementation (Task 13);
+//! Service Control Manager integration. Windows gets the real implementation;
 //! every other platform reports the operation as unsupported and always runs interactively.
 
 /// Registered service name.
