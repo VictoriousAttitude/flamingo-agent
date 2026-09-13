@@ -241,9 +241,9 @@ process, and the child's exit codes and append-only behavior.
 
 ### Coverage and test tiers
 
-Measured line coverage is 92.70% on Linux and 78.00% on Windows (`cargo llvm-cov
---all-targets` on each job, CI run 34763931662). CI enforces a floor of 89% (`floor(92.70) - 3`)
-on the `linux` job and 75% (`floor(78.00) - 3`) on the `windows` job, and publishes both lcov files as build
+Measured line coverage is 93.65% on Linux and 81.64% on Windows (`cargo llvm-cov
+--all-targets` on each job, CI run 34771919720). CI enforces a floor of 90% (`floor(93.65) - 3`)
+on the `linux` job and 78% (`floor(81.64) - 3`) on the `windows` job, and publishes both lcov files as build
 artifacts, so a coverage regression fails the build rather than being noticed later. The
 Windows figure is lower because the code that only the end-to-end job exercises (the SCM
 wrapper, `ServiceMain`, installation, the UAC relaunch) is measured there but not
@@ -655,7 +655,7 @@ C:\Users\RUNNER~1\AppData\Local\Temp\rotation-logs\child.1.log BUILTIN\Administr
 
 ## Verified / not verified
 
-- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs five jobs. The Linux job: rustfmt, clippy with warnings denied, `cargo deny` and `cargo audit`, unit and integration tests, the root-level tests under `sudo` (failing the build if that job is not actually root), an 89% line-coverage floor via `cargo llvm-cov`, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target. The two mutation-testing jobs: `cargo mutants` over the portable and Unix code on Linux and over the Windows-only files on Windows, failing if a mutant survives. The Windows job: clippy, unit and integration tests under MSVC with a static CRT, a 75% line-coverage floor, and the child's CTest suite. The end-to-end job installs the service through `install.ps1` on the Windows runner and verifies the registered configuration and recovery actions, the log output, the exact ACL on `child.log`, the event log registration and the start event, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, refusal of planted log locations, refusal of a second instance, a clean interactive Ctrl+C stop, a hard-killed agent taking its child with it, that neither binary imports the VC++ runtime, and the bootstrap-failure and stop events; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised.
+- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs five jobs. The Linux job: rustfmt, clippy with warnings denied, `cargo deny` and `cargo audit`, unit and integration tests, the root-level tests under `sudo` (failing the build if that job is not actually root), a 90% line-coverage floor via `cargo llvm-cov`, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target. The two mutation-testing jobs: `cargo mutants` over the portable and Unix code on Linux and over the Windows-only files on Windows, failing if a mutant survives. The Windows job: clippy, unit and integration tests under MSVC with a static CRT, a 78% line-coverage floor, and the child's CTest suite. The end-to-end job installs the service through `install.ps1` on the Windows runner and verifies the registered configuration and recovery actions, the log output, the exact ACL on `child.log`, the event log registration and the start event, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, refusal of planted log locations, refusal of a second instance, a clean interactive Ctrl+C stop, a hard-killed agent taking its child with it, that neither binary imports the VC++ runtime, and the bootstrap-failure and stop events; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised.
 - **Linux:** unit, integration and child tests pass; an interactive run under `sudo`
   produces a root-owned `0600` log.
 - **Windows:** the end-to-end CI job above, including the standard-user denial, the UAC

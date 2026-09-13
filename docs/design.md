@@ -795,7 +795,7 @@ Runs on every push and pull request. Five jobs, all required to pass:
 
 | Job | Runner | Steps |
 |---|---|---|
-| `linux` | `ubuntu-latest` | `cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo deny check` (advisories, license allow-list, sources; policy in `deny.toml`) · `cargo audit` · `cargo test` · privileged Linux tests under `sudo` (`cargo test --test privileged_linux -- --ignored`) · restore target ownership (`always()`, so it runs even if the previous step failed) · install `cargo-llvm-cov` · coverage lcov (`cargo llvm-cov --all-targets --lcov`) · coverage line with `--fail-under-lines 89` · upload the lcov artifact · compile-check every Windows code path (`cargo check --target x86_64-pc-windows-gnu`) · `cmake` configure/build + `ctest` for the child |
+| `linux` | `ubuntu-latest` | `cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo deny check` (advisories, license allow-list, sources; policy in `deny.toml`) · `cargo audit` · `cargo test` · privileged Linux tests under `sudo` (`cargo test --test privileged_linux -- --ignored`) · restore target ownership (`always()`, so it runs even if the previous step failed) · install `cargo-llvm-cov` · coverage lcov (`cargo llvm-cov --all-targets --lcov`) · coverage line with `--fail-under-lines 90` · upload the lcov artifact · compile-check every Windows code path (`cargo check --target x86_64-pc-windows-gnu`) · `cmake` configure/build + `ctest` for the child |
 | `windows` | `windows-latest` | `cargo clippy --all-targets -- -D warnings` · `cargo test` (MSVC, static CRT) · `cmake -A x64` build + `ctest` for the child |
 | `windows-service` | `windows-latest`, `needs: [windows]` | end-to-end run of the real service (below) |
 | `mutants` | `ubuntu-latest` | `cargo mutants -j 2` with the policy in `agent-rust/.cargo/mutants.toml`; fails if any mutant of the portable or Unix code survives; uploads `mutants.out` |
@@ -878,9 +878,9 @@ Stated verbatim in the README so the reviewer knows what was actually run:
 
 ### 14.7 Coverage and tiers
 
-Measured line coverage is 92.70% on Linux and 78.00% on Windows (`cargo llvm-cov
---all-targets` on each job, CI run 34763931662). CI enforces a floor of 89% (`floor(92.70) - 3`)
-on the `linux` job and 75% (`floor(78.00) - 3`) on the `windows` job, and publishes both lcov files as build
+Measured line coverage is 93.65% on Linux and 81.64% on Windows (`cargo llvm-cov
+--all-targets` on each job, CI run 34771919720). CI enforces a floor of 90% (`floor(93.65) - 3`)
+on the `linux` job and 78% (`floor(81.64) - 3`) on the `windows` job, and publishes both lcov files as build
 artifacts, so a coverage regression fails the build rather than being noticed later. The
 Windows figure is lower because the code that only the end-to-end job exercises (the SCM
 wrapper, `ServiceMain`, installation, the UAC relaunch) is measured there but not
