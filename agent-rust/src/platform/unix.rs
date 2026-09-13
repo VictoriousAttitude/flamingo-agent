@@ -97,7 +97,7 @@ fn untrusted(path: &Path, reason: &'static str) -> PlatformError {
 
 /// Create the directory (and parents) with mode 0700, tighten it if it already exists,
 /// and hand it to root when running as root. An existing directory that is a symbolic link
-/// or belongs to another user is refused (see [`assert_trusted_existing`]).
+/// or belongs to another user is refused (see `assert_trusted_existing`).
 pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
     assert_trusted_existing(path)?;
     DirBuilder::new()
@@ -111,7 +111,7 @@ pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
 
 /// Create the file with mode 0600 (born locked) and tighten it if it already exists without
 /// touching its content. An existing file that is a symbolic link or belongs to another user
-/// is refused (see [`assert_trusted_existing`]), so the owner is always the effective user:
+/// is refused (see `assert_trusted_existing`), so the owner is always the effective user:
 /// root when the agent runs as root.
 pub fn secure_file(path: &Path) -> Result<(), PlatformError> {
     assert_trusted_existing(path)?;
