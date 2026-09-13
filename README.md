@@ -402,6 +402,42 @@ directory exits 5 before opening any log, and `sc query` still reports the servi
 exit 5: flamingo-agent: acquiring the instance lock: another agent instance already holds the lock at C:\ProgramData\FlamingoAgent\agent.lock
 ```
 
+The last three blocks come from run
+[34747769104](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34747769104)
+(commit `61a7c47`), which added event log reporting.
+
+**15. The event source registration and the start event**
+
+`--install` registered the source; the value is read back unexpanded, and the start event is
+rendered as plain text by the registered message file:
+
+```
+EventMessageFile = %SystemRoot%\System32\eventcreate.exe (kind ExpandString); TypesSupported = 7
+09/13/2026 08:37:42 [1] Information: Flamingo Agent started; details are logged to C:\ProgramData\FlamingoAgent\agent.log
+```
+
+**16. A bootstrap failure reaches the event log**
+
+The registered command line was swapped for one the configuration check rejects and the
+service started; the SCM recorded service-specific exit code 1 and the error text was in the
+Application log:
+
+```
+        STATE              : 1  STOPPED
+        WIN32_EXIT_CODE    : 1066  (0x42a)
+        SERVICE_EXIT_CODE  : 1  (0x1)
+09/13/2026 08:39:16 [3] Error: Flamingo Agent failed to start: child timeout (5s) must be shorter than the period (5s)
+```
+
+**17. The stop event, and the registration removed on uninstall**
+
+```
+09/13/2026 08:39:19 [2] Information: Flamingo Agent stopped on request
+```
+
+After `--uninstall` the step asserts that the registry key under
+`EventLog\Application\FlamingoAgent` no longer exists.
+
 **Not executed (needs a human at the machine):**
 
 - Clicking Accept on the UAC consent dialog. The decline path is exercised in block 8; the
