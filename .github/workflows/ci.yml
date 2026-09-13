@@ -190,9 +190,9 @@ jobs:
           $flag = sc.exe qfailureflag FlamingoAgent | Out-String
           Write-Host $flag
           if ($flag -notmatch 'FAILURE_ACTIONS_ON_NONCRASH_FAILURES\s*:\s*TRUE') { throw 'non-crash failures are not covered' }
-      # The start must be in the Application event log, rendered as plain text (the source
-      # is registered against a message file at install time), and the registration must be
-      # exactly what --install wrote.
+      # The start must be in the Application event log, rendered as plain text through the
+      # message table embedded in the agent's own executable (registered at install time),
+      # and the registration must be exactly what --install wrote.
       - name: Event log records the start
         shell: pwsh
         run: |
@@ -201,7 +201,7 @@ jobs:
           $file = $key.GetValue('EventMessageFile', $null, 'DoNotExpandEnvironmentNames')
           $types = $key.GetValue('TypesSupported')
           Write-Host "EventMessageFile = $file (kind $($key.GetValueKind('EventMessageFile'))); TypesSupported = $types"
-          if ($file -ne '%SystemRoot%\System32\eventcreate.exe' -or $types -ne 7) { throw 'unexpected event source registration' }
+          if ($file -ne "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe" -or $types -ne 7) { throw 'unexpected event source registration' }
           if ($key.GetValueKind('EventMessageFile') -ne 'ExpandString') { throw 'EventMessageFile is not REG_EXPAND_SZ' }
           $ev = Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='FlamingoAgent'; Id=1} -MaxEvents 1
           Write-Host "$($ev.TimeCreated) [$($ev.Id)] $($ev.LevelDisplayName): $($ev.Message)"
