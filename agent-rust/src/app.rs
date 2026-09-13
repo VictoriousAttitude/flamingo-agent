@@ -54,8 +54,13 @@ pub fn run_agent_blocking(
     // first one's logs. Held until the end of this function, that is for the whole run.
     let _instance =
         platform::acquire_instance_lock(&cfg.log_dir).context("acquiring the instance lock")?;
-    let _log_guard = logging::init(&cfg.agent_log, &cfg.log_level, interactive)
-        .context("initialising logging")?;
+    let _log_guard = logging::init(
+        &cfg.agent_log,
+        &cfg.log_level,
+        interactive,
+        cfg.log_rotation,
+    )
+    .context("initialising logging")?;
     install_panic_hook();
 
     // Logging exists from here on, so a bootstrap failure is logged before it propagates:
@@ -70,6 +75,8 @@ pub fn run_agent_blocking(
         protection = %protection,
         period_secs = cfg.period.as_secs(),
         child_timeout_secs = cfg.child_timeout.as_secs(),
+        log_max_bytes = cfg.log_rotation.max_bytes,
+        log_keep = cfg.log_rotation.keep,
         "flamingo-agent starting"
     );
 

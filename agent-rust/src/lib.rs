@@ -15,4 +15,5 @@ pub mod cycle;
 pub mod logging;
 pub mod metrics;
 pub mod platform;
+pub mod rotation;
 pub mod service;

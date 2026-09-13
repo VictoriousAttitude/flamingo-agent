@@ -1,6 +1,9 @@
-//! tracing setup: a non-blocking file appender always, plus stderr when interactive.
+//! tracing setup: a non-blocking, size-rotated file writer always, plus stderr when
+//! interactive.
 
 use std::path::Path;
+
+use crate::rotation::{RotatingWriter, RotationPolicy};
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
@@ -25,17 +28,24 @@ pub enum LoggingError {
     /// A global subscriber was already installed.
     #[error("logging was already initialised")]
     AlreadyInitialised,
+    /// The agent log could not be created or opened.
+    #[error("opening the agent log: {0}")]
+    Open(#[source] std::io::Error),
 }
 
 /// Install the global subscriber. Call after the log directory has been secured so the file
 /// is created inside a locked directory.
-pub fn init(agent_log: &Path, level: &str, also_stderr: bool) -> Result<LogGuard, LoggingError> {
+pub fn init(
+    agent_log: &Path,
+    level: &str,
+    also_stderr: bool,
+    rotation: RotationPolicy,
+) -> Result<LogGuard, LoggingError> {
     let filter = EnvFilter::try_new(level).map_err(|_| LoggingError::Filter(level.to_string()))?;
-    let (dir, name) = match (agent_log.parent(), agent_log.file_name()) {
-        (Some(dir), Some(name)) => (dir, name),
-        _ => return Err(LoggingError::Path(agent_log.display().to_string())),
-    };
-    let appender = tracing_appender::rolling::never(dir, name);
+    if agent_log.parent().is_none() || agent_log.file_name().is_none() {
+        return Err(LoggingError::Path(agent_log.display().to_string()));
+    }
+    let appender = RotatingWriter::open(agent_log, rotation).map_err(LoggingError::Open)?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
 
     let file_layer = fmt::layer()
@@ -59,10 +69,21 @@ pub fn init(agent_log: &Path, level: &str, also_stderr: bool) -> Result<LogGuard
 mod tests {
     use super::*;
 
+    const TEST_ROTATION: RotationPolicy = RotationPolicy {
+        max_bytes: 1 << 20,
+        keep: 1,
+    };
+
     #[test]
     fn invalid_level_is_rejected_before_installing() {
         let tmp = tempfile::tempdir().unwrap();
-        let err = init(&tmp.path().join("agent.log"), "[invalid", false).unwrap_err();
+        let err = init(
+            &tmp.path().join("agent.log"),
+            "[invalid",
+            false,
+            TEST_ROTATION,
+        )
+        .unwrap_err();
         assert!(matches!(err, LoggingError::Filter(_)));
     }
 
@@ -75,7 +96,7 @@ mod tests {
         let root = Path::new("/");
         #[cfg(windows)]
         let root = Path::new(r"C:\");
-        let err = init(root, "info", false).unwrap_err();
+        let err = init(root, "info", false, TEST_ROTATION).unwrap_err();
         assert!(matches!(err, LoggingError::Path(_)), "{err:?}");
     }
 
@@ -83,7 +104,7 @@ mod tests {
     fn writes_events_to_the_file() {
         let tmp = tempfile::tempdir().unwrap();
         let log = tmp.path().join("agent.log");
-        let guard = init(&log, "info", false).unwrap();
+        let guard = init(&log, "info", false, TEST_ROTATION).unwrap();
         tracing::info!(answer = 42, "hello from the test");
         drop(guard);
         let content = std::fs::read_to_string(&log).unwrap();

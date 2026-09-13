@@ -11,7 +11,7 @@ use tracing::{error, info, warn};
 use crate::child::{self, ChildOutcome, ChildSpec};
 use crate::config::Config;
 use crate::metrics::{Metrics, MetricsError};
-use crate::{metrics, platform};
+use crate::{metrics, platform, rotation};
 
 /// Run one cycle, sampling with [`metrics::collect`].
 pub async fn run_cycle(cfg: Arc<Config>, cancel: CancellationToken) -> anyhow::Result<()> {
@@ -36,6 +36,20 @@ where
 
     platform::secure_file(&cfg.child_log)
         .with_context(|| format!("securing child log {}", cfg.child_log.display()))?;
+    // Rotation happens between children, so no writer holds the file; the rotated
+    // generation keeps its DACL because a rename preserves the security descriptor, and the
+    // fresh live file is born locked by the second secure_file. A rotation that fails (a
+    // viewer holding the file open without delete sharing, say) is logged and retried next
+    // cycle; it never stops the cycle.
+    match rotation::rotate_if_large(&cfg.child_log, &cfg.log_rotation) {
+        Ok(false) => {}
+        Ok(true) => {
+            info!(path = %cfg.child_log.display(), "child log rotated");
+            platform::secure_file(&cfg.child_log)
+                .with_context(|| format!("securing child log {}", cfg.child_log.display()))?;
+        }
+        Err(err) => warn!(error = %err, "child log could not be rotated; keeping the current file"),
+    }
 
     let spec = ChildSpec {
         program: cfg.child_path.clone(),

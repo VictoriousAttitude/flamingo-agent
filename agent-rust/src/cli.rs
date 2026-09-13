@@ -7,12 +7,14 @@ use clap::Parser;
 /// Flags that configure a run of the agent itself; `--install` and `--uninstall` reject them
 /// because the registered service is started without arguments. Clap only counts explicitly
 /// passed arguments as conflicts, so the defaults below are unaffected.
-const RUNTIME_OVERRIDES: [&str; 5] = [
+const RUNTIME_OVERRIDES: [&str; 7] = [
     "period_secs",
     "child_timeout_secs",
     "child_path",
     "log_dir",
     "log_level",
+    "log_max_bytes",
+    "log_keep",
 ];
 
 /// Flamingo background agent.
@@ -52,6 +54,14 @@ pub struct Cli {
     /// Log level filter: error, warn, info, debug or trace.
     #[arg(long, default_value = "info")]
     pub log_level: String,
+
+    /// Rotate agent.log and child.log when they reach this many bytes.
+    #[arg(long, default_value_t = 10 * 1024 * 1024, value_parser = clap::value_parser!(u64).range(1024..))]
+    pub log_max_bytes: u64,
+
+    /// Rotated generations to keep per log (agent.1.log … agent.N.log); 0 keeps none.
+    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(..=1000))]
+    pub log_keep: u32,
 }
 
 /// What the invocation asks for.

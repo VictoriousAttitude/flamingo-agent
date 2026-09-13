@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::cli::Cli;
+use crate::rotation::RotationPolicy;
 
 /// Everything the agent needs at run time, with all paths absolute.
 #[derive(Debug, Clone)]
@@ -22,6 +23,8 @@ pub struct Config {
     pub child_log: PathBuf,
     /// tracing filter directive.
     pub log_level: String,
+    /// Size-based rotation applied to both logs.
+    pub log_rotation: RotationPolicy,
 }
 
 /// Configuration validation failures.
@@ -65,6 +68,10 @@ impl Config {
             child_log: log_dir.join("child.log"),
             log_dir,
             log_level: cli.log_level.clone(),
+            log_rotation: RotationPolicy {
+                max_bytes: cli.log_max_bytes,
+                keep: cli.log_keep,
+            },
         })
     }
 }
