@@ -2,7 +2,12 @@
 
 # Windows-only code cannot be tested on the Linux runner that runs this job; its tests run
 # on the Windows job, uninstrumented.
-exclude_globs = ["src/platform/windows.rs", "src/service/windows.rs", "src/main.rs"]
+exclude_globs = [
+    "src/platform/windows.rs",
+    "src/service/windows.rs",
+    "src/service/eventlog.rs",
+    "src/main.rs",
+]
 
 # Mutants that survive the unprivileged tiers by construction. Each is either caught by the
 # root-level tier (which this job does not run) or provably equivalent to the original.

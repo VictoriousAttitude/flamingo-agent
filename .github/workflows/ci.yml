@@ -191,9 +191,13 @@ jobs:
       - name: Event log records the start
         shell: pwsh
         run: |
-          $reg = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\FlamingoAgent'
-          Write-Host "EventMessageFile = $($reg.EventMessageFile); TypesSupported = $($reg.TypesSupported)"
-          if ($reg.EventMessageFile -ne '%SystemRoot%\System32\eventcreate.exe' -or $reg.TypesSupported -ne 7) { throw 'unexpected event source registration' }
+          # Read the stored value unexpanded: Get-ItemProperty would expand %SystemRoot%.
+          $key = Get-Item 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\FlamingoAgent'
+          $file = $key.GetValue('EventMessageFile', $null, 'DoNotExpandEnvironmentNames')
+          $types = $key.GetValue('TypesSupported')
+          Write-Host "EventMessageFile = $file (kind $($key.GetValueKind('EventMessageFile'))); TypesSupported = $types"
+          if ($file -ne '%SystemRoot%\System32\eventcreate.exe' -or $types -ne 7) { throw 'unexpected event source registration' }
+          if ($key.GetValueKind('EventMessageFile') -ne 'ExpandString') { throw 'EventMessageFile is not REG_EXPAND_SZ' }
           $ev = Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='FlamingoAgent'; Id=1} -MaxEvents 1
           Write-Host "$($ev.TimeCreated) [$($ev.Id)] $($ev.LevelDisplayName): $($ev.Message)"
           if ($ev.LevelDisplayName -ne 'Information') { throw "expected an Information event, got $($ev.LevelDisplayName)" }
