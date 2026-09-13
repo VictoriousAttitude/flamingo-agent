@@ -200,6 +200,21 @@ mod tests {
         acquire_instance_lock(tmp.path()).expect("lock is free once the holder is gone");
     }
 
+    /// Only "not found" means "nothing planted here"; any other inspection failure (here
+    /// ENOTDIR, a path below a regular file) must surface as the inspection error rather
+    /// than be waved through to the create step.
+    #[test]
+    fn secure_dir_reports_an_inspection_error_other_than_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("file");
+        fs::write(&file, b"").unwrap();
+        let err = secure_dir(&file.join("logs")).unwrap_err();
+        assert!(
+            matches!(&err, PlatformError::Io { context, .. } if context.contains("inspecting")),
+            "{err}"
+        );
+    }
+
     /// A planted symbolic link must be refused, not followed: with root's privileges the
     /// agent would otherwise lock and write wherever the planter pointed it.
     #[test]

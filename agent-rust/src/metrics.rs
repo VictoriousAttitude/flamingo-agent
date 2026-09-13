@@ -101,7 +101,9 @@ mod tests {
     // different threads can race and observe a zero reading.
     #[test]
     fn rss_is_positive_and_collect_produces_a_recent_sample() {
-        assert!(rss_bytes().unwrap() > 0);
+        // Any process running this test harness has well over a mebibyte resident; a
+        // reading below that is a broken reading, not a small process.
+        assert!(rss_bytes().unwrap() >= 1 << 20);
 
         let before = Utc::now();
         let m = collect().unwrap();
