@@ -852,9 +852,9 @@ Stated verbatim in the README so the reviewer knows what was actually run:
 
 ### 14.7 Coverage and tiers
 
-Measured line coverage is 87.68% on Linux and 75.45% on Windows (`cargo llvm-cov
---all-targets` on each job). CI enforces a floor of 84% (`floor(87.68) - 3`) on the `linux`
-job and 72% (`floor(75.45) - 3`) on the `windows` job, and publishes both lcov files as build
+Measured line coverage is 92.70% on Linux and 78.00% on Windows (`cargo llvm-cov
+--all-targets` on each job, CI run 34763931662). CI enforces a floor of 89% (`floor(92.70) - 3`)
+on the `linux` job and 75% (`floor(78.00) - 3`) on the `windows` job, and publishes both lcov files as build
 artifacts, so a coverage regression fails the build rather than being noticed later. The
 Windows figure is lower because the code that only the end-to-end job exercises (the SCM
 wrapper, `ServiceMain`, installation, the UAC relaunch) is measured there but not
