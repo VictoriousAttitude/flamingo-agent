@@ -128,9 +128,11 @@ async fn cancellation_interrupts_the_wait() {
 }
 
 /// The fixture writes its PID as soon as it starts; wait for it so a slow start is not
-/// mistaken for a child that never ran.
+/// mistaken for a child that never ran. The bound is generous (10 s) because on Windows the
+/// fixture is PowerShell, whose cold start on a shared runner has been observed to take
+/// several seconds; the bound only decides when to give up, not what is asserted.
 async fn pid_written(path: &std::path::Path) -> Option<u32> {
-    for _ in 0..200 {
+    for _ in 0..1000 {
         if let Ok(text) = std::fs::read_to_string(path) {
             if let Ok(pid) = text.trim().parse::<u32>() {
                 return Some(pid);
@@ -190,9 +192,11 @@ async fn timed_out_child_process_is_gone() {
 #[tokio::test]
 async fn large_stdout_does_not_deadlock() {
     // 300 kB is far past the 64 kB pipe buffer: a child whose output is only drained
-    // after it exits would block forever here.
+    // after it exits would block forever here. The timeout is only the give-up bound: a
+    // deadlocked child would hit it whatever its value, while the Windows fixture is
+    // PowerShell, whose cold start on a shared runner can take several seconds.
     let outcome = run_child(
-        &spec("spam", Duration::from_secs(10)),
+        &spec("spam", Duration::from_secs(30)),
         &[],
         &CancellationToken::new(),
     )
