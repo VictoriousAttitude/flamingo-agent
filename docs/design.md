@@ -797,7 +797,7 @@ Runs on every push and pull request. Five jobs, all required to pass:
 |---|---|---|
 | `linux` | `ubuntu-latest` | `cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo deny check` (advisories, license allow-list, sources; policy in `deny.toml`) · `cargo audit` · `cargo test` · privileged Linux tests under `sudo` (`cargo test --test privileged_linux -- --ignored`) · restore target ownership (`always()`, so it runs even if the previous step failed) · install `cargo-llvm-cov` · coverage lcov (`cargo llvm-cov --all-targets --lcov`) · coverage line with `--fail-under-lines 90` · upload the lcov artifact · compile-check every Windows code path (`cargo check --target x86_64-pc-windows-gnu`) · `cmake` configure/build + `ctest` for the child |
 | `windows` | `windows-latest` | `cargo clippy --all-targets -- -D warnings` · `cargo test` (MSVC, static CRT) · `cmake -A x64` build + `ctest` for the child |
-| `windows-service` | `windows-latest`, `needs: [windows]` | end-to-end run of the real service (below) |
+| `windows-service` | matrix `windows-2025`, `windows-2022`; `needs: [windows]`; `fail-fast: false` | end-to-end run of the real service (below) on both server images |
 | `mutants` | `ubuntu-latest` | `cargo mutants -j 2` with the policy in `agent-rust/.cargo/mutants.toml`; fails if any mutant of the portable or Unix code survives; uploads `mutants.out` |
 | `mutants-windows` | `windows-latest` | `cargo mutants -j 2 --config .cargo/mutants-windows.toml` over the Windows-only sources with the library unit tests; fails if a mutant outside the documented exclusions survives; uploads `mutants.out` |
 
@@ -908,8 +908,12 @@ both operating systems (Linux: interactive under `sudo`, 2 s period, stopped wit
 Windows: the installed service at its 5 s cadence) and checks the logs with
 `scripts/soak_check.py`: at least 90% of the expected cycles, every one with a completed
 child reporting `elevated=true`, no `ERROR`/`WARN` lines, and resident-memory growth between
-the post-warm-up steady state and the last tenth of the run bounded by 2 MiB. It answers the
-one question the per-push jobs cannot: whether anything drifts over hundreds of cycles.
+the post-warm-up steady state and the last tenth of the run bounded by 2 MiB. Both jobs
+also sample kernel handles (Windows) or file descriptors (Linux) and threads after a minute
+of warm-up and at the end, and fail on growth, because such leaks would not show in resident
+memory for a long time. It answers the one question the per-push jobs cannot: whether
+anything drifts over hundreds of cycles. Measured: an hour on both platforms with flat
+memory (README block 18); descriptors, handles and threads flat over ten minutes.
 
 **Mutation testing.** Coverage is necessary, not sufficient: a line can run without any
 assertion depending on it. The `mutants` job (§14.5) runs `cargo mutants` over the portable

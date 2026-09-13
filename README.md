@@ -306,9 +306,11 @@ cadence held (at least 90% of the expected cycles), every cycle completed a chil
 reported an elevated token, no `ERROR` or `WARN` line was written, and resident memory did
 not grow by more than 2 MiB between the steady state after warm-up and the last tenth of the
 run. On Linux the agent runs under `sudo` at a 2 s period and is stopped with `SIGINT`; on
-Windows the installed service runs at its registered 5 s cadence. It is started by hand
-(`gh workflow run soak.yml -f minutes=30`, or the Actions tab) so the regular CI stays fast,
-and it uploads both logs as artifacts. The same script checks a local run: build both
+Windows the installed service runs at its registered 5 s cadence. Because a kernel handle,
+file descriptor or thread leak would not show in resident memory for a long time, both jobs
+also sample those counts after a minute of warm-up and again at the end and fail on growth.
+It is started by hand (`gh workflow run soak.yml -f minutes=30`, or the Actions tab) so the
+regular CI stays fast, and it uploads both logs as artifacts. The same script checks a local run: build both
 binaries, run the agent under `sudo` for a while, stop it with Ctrl-C, then point the script
 at the two logs with the minutes and period you used.
 
@@ -622,6 +624,11 @@ ok   RSS growth after warm-up: +38 KiB (early mean 13345 KiB, late mean 13383 Ki
 soak checks passed
 ```
 
+With the leak checks added (`Soak` run
+[34774410585](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34774410585),
+ten minutes): Linux 11 file descriptors and 5 threads at both samples; the Windows service
+147 handles after a minute and 144 at the end, 9 threads at both samples.
+
 Longer runs are one command away (`gh workflow run soak.yml -f minutes=120`).
 
 **19. Both logs rotate by size and the rotated generations keep the lock** (run
@@ -655,12 +662,15 @@ C:\Users\RUNNER~1\AppData\Local\Temp\rotation-logs\child.1.log BUILTIN\Administr
 
 ## Verified / not verified
 
-- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs five jobs. The Linux job: rustfmt, clippy with warnings denied, `cargo deny` and `cargo audit`, unit and integration tests, the root-level tests under `sudo` (failing the build if that job is not actually root), a 90% line-coverage floor via `cargo llvm-cov`, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target. The two mutation-testing jobs: `cargo mutants` over the portable and Unix code on Linux and over the Windows-only files on Windows, failing if a mutant survives. The Windows job: clippy, unit and integration tests under MSVC with a static CRT, a 78% line-coverage floor, and the child's CTest suite. The end-to-end job installs the service through `install.ps1` on the Windows runner and verifies the registered configuration and recovery actions, the log output, the exact ACL on `child.log`, the event log registration and the start event, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, refusal of planted log locations, refusal of a second instance, a clean interactive Ctrl+C stop, a hard-killed agent taking its child with it, that neither binary imports the VC++ runtime, and the bootstrap-failure and stop events; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised.
+- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs five jobs. The Linux job: rustfmt, clippy with warnings denied, `cargo deny` and `cargo audit`, unit and integration tests, the root-level tests under `sudo` (failing the build if that job is not actually root), a 90% line-coverage floor via `cargo llvm-cov`, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target. The two mutation-testing jobs: `cargo mutants` over the portable and Unix code on Linux and over the Windows-only files on Windows, failing if a mutant survives. The Windows job: clippy, unit and integration tests under MSVC with a static CRT, a 78% line-coverage floor, and the child's CTest suite. The end-to-end job, run on both the Server 2025 and the Server 2022 images, installs the service through `install.ps1` and verifies the registered configuration and recovery actions, the log output, the exact ACL on `child.log`, the event log registration and the start event, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, refusal of planted log locations, refusal of a second instance, a clean interactive Ctrl+C stop, a hard-killed agent taking its child with it, that neither binary imports the VC++ runtime, and the bootstrap-failure and stop events; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised.
 - **Linux:** unit, integration and child tests pass; an interactive run under `sudo`
   produces a root-owned `0600` log.
-- **Windows:** the end-to-end CI job above, including the standard-user denial, the UAC
-  decline path and the interactive Ctrl+C stop; only the UAC Accept click and an actual
-  reboot are listed as not executed.
+- **Windows:** the end-to-end CI job above, run on both the Windows Server 2025 and the
+  Windows Server 2022 images, including the standard-user denial, the UAC decline path and
+  the interactive Ctrl+C stop; only the UAC Accept click and an actual reboot are listed as
+  not executed. Windows 10 and 11 client editions have no x64 hosted runner and were not
+  exercised; the APIs used have been stable since Windows Vista, and job objects need
+  Windows 8 or later.
 - **macOS:** compiles; not executed.
 
 ## Design notes
