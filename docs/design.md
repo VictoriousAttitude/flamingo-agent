@@ -365,6 +365,17 @@ anyone else.
 
 **Applied when.** At bootstrap (§4.6) and again immediately before every child spawn (§5.3).
 
+**Pre-planting.** `ProgramData` lets any user create a subdirectory, and a junction needs no
+privilege, so an object may already exist at the log path before the agent's first start. An
+existing object is adopted only if `GetFileAttributesW` shows no `FILE_ATTRIBUTE_REPARSE_POINT`
+and its owner (`GetNamedSecurityInfoW` with `OWNER_SECURITY_INFORMATION`, compared with
+`EqualSid` against the well-known Administrators and LocalSystem SIDs) is one of those two.
+Otherwise `secure_dir`/`secure_file` return `PlatformError::Untrusted` and bootstrap fails
+closed; the agent never takes ownership of a planted object, because a hostile owner keeps the
+implicit `WRITE_DAC` that would let them undo the lock afterwards. Proof: a unit test refuses a
+junction on the Windows runner, and the end-to-end job plants a directory and a junction as the
+standard account and requires the agent to exit 1 for both.
+
 **Privilege required.** `WRITE_DAC` on the object — held implicitly by the owner and by
 SYSTEM/Administrators. This is why the agent must be elevated in interactive mode.
 
@@ -380,6 +391,11 @@ Same shape, native primitives:
 `chown` requires root, which §4.4 already enforces. Tests that run unprivileged exercise
 mode bits against a temp dir and skip the `chown` assertion. macOS is the same code path;
 it is compiled but not exercised in this deliverable.
+
+The same pre-planting rule applies here: an existing path that is a symbolic link
+(`symlink_metadata`) or is owned by a uid other than the effective one is refused with
+`PlatformError::Untrusted`. Proof: unit tests refuse a symlinked directory and file; the
+root-level test hands a directory to `nobody` and requires the refusal.
 
 ### 6.3 The child's obligations
 

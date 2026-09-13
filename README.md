@@ -102,6 +102,17 @@ every child spawn, so the file is explicitly protected at the moment each child 
 an administrator removed it in between. The child only ever appends and never recreates the
 file.
 
+**Pre-planting is refused, not repaired.** Under `ProgramData` any user may create a
+subdirectory before the service first starts, and a junction needs no privilege at all. If
+the log directory or the child log already exists when the agent arrives, it is used only if
+it is a real directory or file (not a reparse point, which would redirect SYSTEM's writes
+wherever the planter chose) and its owner is Administrators or SYSTEM (an owner keeps the
+implicit right to change the DACL, so a foreign owner could undo the lock). Anything else
+makes the agent refuse to start with a clear message; it never takes ownership of a planted
+object. On Linux the same rule applies to symbolic links and to a directory owned by another
+user. This is proven in CI: a standard account plants a directory and a junction, and the
+agent refuses both (evidence block 11).
+
 ## Testing
 
 Portable code is tested automatically on Linux and Windows in CI; Windows-specific behavior
