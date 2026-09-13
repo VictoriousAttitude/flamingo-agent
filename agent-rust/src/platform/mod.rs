@@ -28,6 +28,15 @@ pub enum PlatformError {
     /// Elevation is refused outright by policy for this account, so no prompt is offered.
     #[error("elevation is blocked by policy for this account")]
     ElevationBlockedByPolicy,
+    /// An existing log location is not one the agent can trust: a reparse point or symbolic
+    /// link, or an object owned by another account. It is refused rather than taken over.
+    #[error("{path} is {reason}; refusing to use it")]
+    Untrusted {
+        /// The location that was refused.
+        path: String,
+        /// Why it was refused.
+        reason: &'static str,
+    },
     /// The operation has no implementation on this platform.
     #[error("{0} is not supported on this platform")]
     Unsupported(&'static str),

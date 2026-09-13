@@ -18,14 +18,17 @@ use windows_sys::Win32::Security::Authorization::{
     SetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    CreateWellKnownSid, EqualSid, GetSecurityDescriptorDacl, WinBuiltinAdministratorsSid,
+    WinLocalSystemSid, ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+    SECURITY_MAX_SID_SIZE, WELL_KNOWN_SID_TYPE,
 };
 use windows_sys::Win32::Security::{
     GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    CreateDirectoryW, CreateFileW, GetFileAttributesW, FILE_ATTRIBUTE_NORMAL,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES,
     OPEN_ALWAYS,
 };
 use windows_sys::Win32::System::Com::{
@@ -155,11 +158,102 @@ pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
     let attributes = descriptor.attributes();
     // SAFETY: `name` is NUL-terminated; `attributes` and its descriptor outlive the call.
     let created = unsafe { CreateDirectoryW(name.as_ptr(), &attributes) };
-    // SAFETY: GetLastError has no preconditions.
-    if created == 0 && unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
-        return Err(last_error("CreateDirectoryW"));
+    if created == 0 {
+        // SAFETY: GetLastError has no preconditions.
+        if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
+            return Err(last_error("CreateDirectoryW"));
+        }
+        // Somebody created it before us: only proceed if it is a real directory we own.
+        assert_trusted_existing(path)?;
     }
     apply_dacl(path, &descriptor)
+}
+
+/// Refuse an existing path that could have been planted by another account before the
+/// agent's first start. Under `ProgramData` any user may create a subdirectory, so the agent
+/// checks two things before touching an object it did not create: it is not a reparse point
+/// (a junction or symbolic link would redirect SYSTEM's writes anywhere the planter chose),
+/// and its owner is BUILTIN\Administrators or SYSTEM (an owner keeps the implicit right to
+/// change the DACL, so a foreign owner could undo the lock). Anything else is refused; the
+/// agent never takes ownership of a planted object.
+fn assert_trusted_existing(path: &Path) -> Result<(), PlatformError> {
+    let name = wide(path.as_os_str());
+    // SAFETY: `name` is NUL-terminated.
+    let attributes = unsafe { GetFileAttributesW(name.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        return Err(last_error("GetFileAttributesW"));
+    }
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(untrusted(
+            path,
+            "a reparse point (junction or symbolic link)",
+        ));
+    }
+
+    let mut owner: PSID = ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: `name` is NUL-terminated; the owner pointer points into the returned
+    // descriptor, which stays alive until `owned` is dropped below.
+    let code = unsafe {
+        GetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if code != 0 || descriptor.is_null() || owner.is_null() {
+        return Err(PlatformError::Os {
+            call: "GetNamedSecurityInfoW (owner)",
+            code,
+        });
+    }
+    let owned = SecurityDescriptor(descriptor);
+    let trusted = [WinBuiltinAdministratorsSid, WinLocalSystemSid]
+        .into_iter()
+        .map(|kind| well_known_sid_equals(kind, owner))
+        .collect::<Result<Vec<bool>, PlatformError>>()?
+        .into_iter()
+        .any(|equal| equal);
+    drop(owned);
+    if !trusted {
+        return Err(untrusted(
+            path,
+            "owned by an account other than Administrators or SYSTEM",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether `sid` is the given well-known SID.
+fn well_known_sid_equals(kind: WELL_KNOWN_SID_TYPE, sid: PSID) -> Result<bool, PlatformError> {
+    let mut buffer = [0u8; SECURITY_MAX_SID_SIZE as usize];
+    let mut size = buffer.len() as u32;
+    // SAFETY: the buffer is SECURITY_MAX_SID_SIZE bytes, the largest a SID can be.
+    let ok = unsafe {
+        CreateWellKnownSid(
+            kind,
+            ptr::null_mut(),
+            buffer.as_mut_ptr().cast::<c_void>(),
+            &mut size,
+        )
+    };
+    if ok == 0 {
+        return Err(last_error("CreateWellKnownSid"));
+    }
+    // SAFETY: both pointers refer to valid SIDs for the duration of the call.
+    Ok(unsafe { EqualSid(sid, buffer.as_mut_ptr().cast::<c_void>()) } != 0)
+}
+
+fn untrusted(path: &Path, reason: &'static str) -> PlatformError {
+    PlatformError::Untrusted {
+        path: path.display().to_string(),
+        reason,
+    }
 }
 
 /// Create the file born-locked with `FILE_SDDL` (content untouched if it exists), then
@@ -187,13 +281,20 @@ pub fn secure_file(path: &Path) -> Result<(), PlatformError> {
     if handle == INVALID_HANDLE_VALUE {
         let create_err = last_error("CreateFileW");
         return if path.exists() {
+            assert_trusted_existing(path)?;
             apply_dacl(path, &descriptor)
         } else {
             Err(create_err)
         };
     }
+    // SAFETY: GetLastError has no preconditions; read before anything else can change it.
+    let existed = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     // SAFETY: `handle` is valid and owned here.
     unsafe { CloseHandle(handle) };
+    if existed {
+        // Somebody created it before us: only proceed if it is a real file we own.
+        assert_trusted_existing(path)?;
+    }
     apply_dacl(path, &descriptor)
 }
 
@@ -437,6 +538,28 @@ pub fn relaunch_privileged(args: &[OsString]) -> Result<i32, PlatformError> {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// A planted junction must be refused, not followed: as SYSTEM the agent would otherwise
+    /// lock and write wherever the planter pointed it. Junctions need no privilege to create.
+    #[test]
+    fn secure_dir_refuses_a_junction() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = tmp.path().join("planted");
+        let status = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+        let err = secure_dir(&link).unwrap_err();
+        assert!(
+            matches!(&err, PlatformError::Untrusted { reason, .. } if reason.contains("reparse point")),
+            "{err}"
+        );
+    }
 
     /// The job is what makes a hard kill of the agent take its children with it: closing the
     /// job's last handle must terminate a process assigned to it.

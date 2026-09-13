@@ -69,9 +69,37 @@ pub fn bind_child(_child: &tokio::process::Child) -> Result<(), PlatformError> {
     Ok(())
 }
 
+/// Refuse an existing path that could have been planted by another user before the agent's
+/// first start: a symbolic link (which would redirect root's writes anywhere) or an object
+/// owned by someone other than the effective user. The agent never takes such a path over.
+fn assert_trusted_existing(path: &Path) -> Result<(), PlatformError> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(PlatformError::io("inspecting existing log location", err)),
+    };
+    if meta.file_type().is_symlink() {
+        return Err(untrusted(path, "a symbolic link"));
+    }
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    if meta.uid() != unsafe { libc::geteuid() } {
+        return Err(untrusted(path, "owned by another user"));
+    }
+    Ok(())
+}
+
+fn untrusted(path: &Path, reason: &'static str) -> PlatformError {
+    PlatformError::Untrusted {
+        path: path.display().to_string(),
+        reason,
+    }
+}
+
 /// Create the directory (and parents) with mode 0700, tighten it if it already exists,
-/// and hand it to root when running as root.
+/// and hand it to root when running as root. An existing directory that is a symbolic link
+/// or belongs to another user is refused (see [`assert_trusted_existing`]).
 pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
+    assert_trusted_existing(path)?;
     DirBuilder::new()
         .recursive(true)
         .mode(DIR_MODE)
@@ -83,8 +111,10 @@ pub fn secure_dir(path: &Path) -> Result<(), PlatformError> {
 }
 
 /// Create the file with mode 0600 (born locked), tighten it if it already exists without
-/// touching its content, and hand it to root when running as root.
+/// touching its content, and hand it to root when running as root. An existing file that is
+/// a symbolic link or belongs to another user is refused (see [`assert_trusted_existing`]).
 pub fn secure_file(path: &Path) -> Result<(), PlatformError> {
+    assert_trusted_existing(path)?;
     OpenOptions::new()
         .create(true)
         .append(true)
@@ -120,6 +150,53 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    /// A planted symbolic link must be refused, not followed: with root's privileges the
+    /// agent would otherwise lock and write wherever the planter pointed it.
+    #[test]
+    fn secure_dir_refuses_a_symbolic_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("real");
+        fs::create_dir(&target).unwrap();
+        let link = tmp.path().join("planted");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let err = secure_dir(&link).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PlatformError::Untrusted {
+                    reason: "a symbolic link",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert!(
+            link.is_symlink() && target.is_dir(),
+            "the link must be left untouched"
+        );
+    }
+
+    #[test]
+    fn secure_file_refuses_a_symbolic_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("real.log");
+        fs::write(&target, "planted\n").unwrap();
+        let link = tmp.path().join("child.log");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let err = secure_file(&link).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PlatformError::Untrusted {
+                    reason: "a symbolic link",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "planted\n");
+    }
 
     fn mode(path: &Path) -> u32 {
         fs::metadata(path).unwrap().permissions().mode() & 0o777
