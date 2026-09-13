@@ -221,8 +221,9 @@ The evidence below is the real output of the `windows-service` job of CI run
 [34692877714](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34692877714)
 (commit `c4a9814`), which installs the service on a `windows-latest` runner (the runner
 account is an administrator) with `install.ps1`, lets it run, inspects it, then stops and
-removes it. Every block below is pasted from that one run. It is not a hand-run VM session;
-the items that genuinely need one are listed as not executed at the end of this section.
+removes it. Blocks 1–5 are pasted from that run; each later block names the run that added
+the check it documents. None of it is a hand-run VM session; the items that genuinely need
+one are listed as not executed at the end of this section.
 
 **1. Registered configuration — `sc.exe qc FlamingoAgent`**
 
