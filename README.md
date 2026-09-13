@@ -369,6 +369,17 @@ without changing anything:
 FAILURE_ACTIONS_ON_NONCRASH_FAILURES:  TRUE
 ```
 
+**14. A second agent on the service's log directory is refused**
+
+From run
+[34746618146](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34746618146)
+(commit `7c51667`): with the service running, an interactive agent pointed at the same
+directory exits 5 before opening any log, and `sc query` still reports the service `RUNNING`:
+
+```
+exit 5: flamingo-agent: acquiring the instance lock: another agent instance already holds the lock at C:\ProgramData\FlamingoAgent\agent.lock
+```
+
 **Not executed (needs a human at the machine):**
 
 - Clicking Accept on the UAC consent dialog. The decline path is exercised in block 8; the
