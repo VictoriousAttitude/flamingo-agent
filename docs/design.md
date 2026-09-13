@@ -509,7 +509,46 @@ the `[profile.release]` entry is what actually holds the guarantee in a shipped 
 
 ## 11. Security notes and Windows background
 
-These are the facts the design depends on, stated so a reviewer can check the reasoning.
+### 11.1 Threat model
+
+**Attacker.** A local standard user on the target machine: no administrator rights, no
+physical access, no kernel or driver, but able to run programs, create files under
+`ProgramData` and `Users\Public`, create junctions and symbolic links to places they can
+already reach, and kill or start their own processes. **Out of scope:** a local administrator
+(who can undo any DACL by design), a remote attacker (the agent opens no network surface), a
+compromised SYSTEM account or kernel, and hardware or offline-disk access.
+
+**Assets.** The confidentiality and integrity of `child.log` (the graded asset), the
+integrity of the two binaries, and the availability of the service.
+
+| # | Vector | Mitigation | Proof |
+|---|---|---|---|
+| 1 | Read `child.log` | Protected DACL grants only Administrators and SYSTEM; the directory is locked too, so traversal is denied | `secure_file_creates_born_locked`; end-to-end "Standard user is denied", README block 7 |
+| 2 | Delete or rename `child.log` | `DELETE` withheld by the file DACL and `FILE_DELETE_CHILD` withheld by the directory DACL | end-to-end delete/rename denied, block 7 |
+| 3 | Modify or truncate `child.log` | Same DACL; the child only appends and never recreates the file | `icacls` block 3; `secure_file_replaces_inherited_acl_and_keeps_content` |
+| 4 | Regain access through inheritance | `P` (protected) DACL: no inherited entries survive | `assert_file_policy` tests; "no `(I)`" assertion, block 3 |
+| 5 | Regain access between cycles (delete and recreate the file) | DACL re-applied immediately before every spawn | `dacl_is_reapplied_after_the_log_is_deleted` |
+| 6 | Pre-plant the log directory before first start (foreign owner keeps `WRITE_DAC`) | An existing directory or file owned by anyone but Administrators/SYSTEM (root/euid on Unix) is refused; ownership is never taken over | end-to-end "Planted log locations are refused"; `foreign_owned_log_directory_is_refused` (root) |
+| 7 | Pre-plant a junction or symbolic link (redirect SYSTEM's writes) | Reparse points and symlinks are refused before any write | `secure_dir_refuses_a_junction`; `secure_dir_refuses_a_symbolic_link`; end-to-end planted link |
+| 8 | Leave a weakened DACL that denies the agent write access | Re-apply falls through `CreateFileW`'s denial to `SetNamedSecurityInfoW`, which the owner may always call | `secure_file_recovers_a_file_that_denies_write` |
+| 9 | Plant a binary or DLL the agent will load | Child path is absolute under `Program Files` (administrators only); no `PATH` search; both binaries import only OS DLLs (static CRT) | end-to-end import-table check, block 10 |
+| 10 | Inject arguments through the metric values | No shell anywhere; argv passed directly; quoting exists only for the UAC relaunch and is property-tested against `CommandLineToArgvW` | `quoting_round_trips_through_the_reference_parser`; `round_trips_through_the_real_parser` |
+| 11 | Remove or replace the child binary | `Program Files` is administrator-only; a missing child is logged each cycle and the service keeps running | end-to-end missing-child step, block 6 |
+| 12 | Make the child hang or flood its output | Bounded wait with `kill_on_drop`; pipes drained concurrently with the wait | `slow_child_times_out_and_is_killed`; `large_stdout_does_not_deadlock` |
+| 13 | Orphan a child by killing the agent | Job object with kill-on-close (Windows); parent-death signal (Linux) | `job_object_kills_its_processes_when_closed`; `hard_killed_agent_takes_its_child_with_it`; end-to-end hard-kill step |
+| 14 | Crash the agent through a bug in a cycle | Each cycle is its own task; a panic is logged and the loop continues; the SCM restarts the service after a real crash | `a_panicking_cycle_does_not_stop_the_loop`; `sc qfailure` end-to-end step |
+| 15 | Abuse the interactive relaunch to elevate something else | The relaunch targets `current_exe()` only; refusals return an error code instead of blocking on a dialog | end-to-end UAC decline, block 8 |
+| 16 | Stop the service or edit its registration | Requires SCM `STOP`/`CHANGE_CONFIG` rights, held by administrators only (Windows semantics, not agent code) | `sc qc`, block 1 |
+| 17 | Exhaust the disk through log growth | **Not mitigated**: no rotation. Listed in README limitations | — |
+| 18 | Interleave logs by starting a second instance | **Not mitigated**: no single-instance guard. Listed in README limitations; CI's interactive runs use their own log directory | — |
+
+The two unmitigated rows are availability concerns for an administrator, not confidentiality
+or integrity losses to the standard user, which is why they were left as documented
+follow-ups rather than built.
+
+### 11.2 Windows facts the design depends on
+
+These are stated so a reviewer can check the reasoning.
 
 - **Session 0 and services.** Since Vista, services run in session 0 with no interactive
   desktop. UAC is a property of interactive logon sessions; it does not apply to services.

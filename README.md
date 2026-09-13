@@ -350,7 +350,10 @@ logger-child.exe imports: KERNEL32.dll, ADVAPI32.dll
 
 ## Design notes
 
-See [`docs/design.md`](docs/design.md). The six points most worth knowing:
+See [`docs/design.md`](docs/design.md). Its §11.1 is the threat model: the attacker
+considered, eighteen vectors, the mitigation for each, and the test or CI step that proves it,
+including the two vectors that are deliberately not mitigated. The six points most worth
+knowing:
 
 1. **Protected DACL, directory included** — see "How the ACL is enforced".
 2. **No elevation code in service mode** — a LocalSystem service already holds the most
