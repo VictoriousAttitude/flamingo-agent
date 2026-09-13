@@ -130,6 +130,20 @@ jobs:
           if ($qc -notmatch 'LocalSystem') { throw 'not LocalSystem' }
           $q = sc.exe query FlamingoAgent | Out-String
           if ($q -notmatch 'RUNNING') { throw "not RUNNING: $q" }
+      # Recovery: the SCM must be configured to restart the service after a failure, twice,
+      # five seconds apart, with a one-day reset of the attempt counter, and to treat a
+      # non-zero exit like a crash.
+      - name: Recovery configuration
+        shell: pwsh
+        run: |
+          $qf = sc.exe qfailure FlamingoAgent | Out-String
+          Write-Host $qf
+          if ($qf -notmatch 'RESET_PERIOD \(in seconds\)\s*:\s*86400') { throw 'reset period is not one day' }
+          $restarts = ([regex]::Matches($qf, 'RESTART -- Delay = 5000 milliseconds')).Count
+          if ($restarts -ne 2) { throw "expected 2 restart actions with a 5 s delay, found $restarts" }
+          $flag = sc.exe qfailureflag FlamingoAgent | Out-String
+          Write-Host $flag
+          if ($flag -notmatch 'FAILURE_ACTIONS_ON_NONCRASH_FAILURES\s*:\s*TRUE') { throw 'non-crash failures are not covered' }
       - name: Let it run three cycles
         shell: pwsh
         run: Start-Sleep -Seconds 12
