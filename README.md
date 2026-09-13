@@ -11,7 +11,7 @@ Windows is the fully implemented platform.
 ├── logger-child/     C++17 child: logs its arguments to stdout and an ACL-protected file
 ├── install.ps1       Build both, install under Program Files, register the service
 ├── docs/design.md    Design document (architecture, security notes, test strategy)
-└── .github/          CI: four jobs on every push (Linux, mutation testing, Windows, Windows service end-to-end)
+└── .github/          CI: five jobs on every push (Linux, mutation testing on both, Windows, Windows service end-to-end)
 ```
 
 ## Confirmed interpretations
@@ -276,7 +276,7 @@ machine and no script can perform them: clicking Accept on the UAC consent dialo
 actual reboot.
 
 **Mutation testing.** Line coverage says a line ran, not that a test would notice if it were
-wrong. A fourth CI job runs `cargo mutants` over the portable and Unix code (84 mutants:
+wrong. A CI job runs `cargo mutants` over the portable and Unix code (84 mutants:
 every function return replaced, every operator and match guard flipped) and fails the build
 if any mutant survives the unprivileged tiers. The current pass kills 72 and the remaining 12
 do not compile (they substitute `Default::default()` on types that have none). Three mutants
@@ -287,8 +287,18 @@ lies, and a `prepare_child` that skips the parent-death signal), and one is equi
 left 13 mutants alive; closing them added five tests (an in-process run of the whole
 bootstrap and loop, the panic hook, the relaunch report, the RSS floor, an inspection error
 that must not read as "not found") and removed a `chown` step that no test could observe
-because the pre-planting rule had made it unreachable. The Windows-only files are not
-mutated: their tests run on the Windows job, and an instrumented pass there was not built.
+because the pre-planting rule had made it unreachable. The three Windows-only files get the
+same treatment on the Windows runner (`agent-rust/.cargo/mutants-windows.toml`): 92 mutants,
+80 killed, 12 uncompilable, none missed. Functions that only the end-to-end job can reach
+(the SCM dispatcher, `ServiceMain`, install and uninstall, state polling, the UAC relaunch)
+are excluded by name, as are fourteen mutants that are equivalent by construction, each with
+its reason next to it (defensive double-checks on API contracts, OR-ed flags with disjoint
+bits, a create handle closed on the next line, two drop leaks, and an `is_privileged` that
+only an unelevated process can catch). The first Windows pass left 33 alive and drove six
+tests (the owner check must tell SIDs apart, the create handle must be closed, a file
+symbolic link must be refused, the child must land in the job, the registration must read
+back from the registry, the report boolean must reflect the call) plus the removal of two
+redundant fields.
 
 **Soak run.** A separate workflow, `Soak`, runs the real agent for a chosen number of
 minutes on both operating systems and checks the result with `scripts/soak_check.py`: the
@@ -624,7 +634,7 @@ C:\Users\RUNNER~1\AppData\Local\Temp\rotation-logs\child.1.log BUILTIN\Administr
 
 ## Verified / not verified
 
-- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs four jobs. The Linux job: rustfmt, clippy with warnings denied, `cargo deny` and `cargo audit`, unit and integration tests, the root-level tests under `sudo` (failing the build if that job is not actually root), an 89% line-coverage floor via `cargo llvm-cov`, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target. The mutation-testing job: `cargo mutants` over the portable and Unix code, failing if a mutant survives. The Windows job: clippy, unit and integration tests under MSVC with a static CRT, a 75% line-coverage floor, and the child's CTest suite. The end-to-end job installs the service through `install.ps1` on the Windows runner and verifies the registered configuration and recovery actions, the log output, the exact ACL on `child.log`, the event log registration and the start event, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, refusal of planted log locations, refusal of a second instance, a clean interactive Ctrl+C stop, a hard-killed agent taking its child with it, that neither binary imports the VC++ runtime, and the bootstrap-failure and stop events; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised.
+- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs five jobs. The Linux job: rustfmt, clippy with warnings denied, `cargo deny` and `cargo audit`, unit and integration tests, the root-level tests under `sudo` (failing the build if that job is not actually root), an 89% line-coverage floor via `cargo llvm-cov`, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target. The two mutation-testing jobs: `cargo mutants` over the portable and Unix code on Linux and over the Windows-only files on Windows, failing if a mutant survives. The Windows job: clippy, unit and integration tests under MSVC with a static CRT, a 75% line-coverage floor, and the child's CTest suite. The end-to-end job installs the service through `install.ps1` on the Windows runner and verifies the registered configuration and recovery actions, the log output, the exact ACL on `child.log`, the event log registration and the start event, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, refusal of planted log locations, refusal of a second instance, a clean interactive Ctrl+C stop, a hard-killed agent taking its child with it, that neither binary imports the VC++ runtime, and the bootstrap-failure and stop events; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised.
 - **Linux:** unit, integration and child tests pass; an interactive run under `sudo`
   produces a root-owned `0600` log.
 - **Windows:** the end-to-end CI job above, including the standard-user denial, the UAC

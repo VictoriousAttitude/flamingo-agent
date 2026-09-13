@@ -96,7 +96,7 @@ vector 18 and §4.3.)
 ├── README.md                    build, install, evidence, architecture diagrams
 ├── docs/design.md               this document
 └── .github/workflows/
-    ├── ci.yml                   four jobs: Linux, mutation testing, Windows, Windows service end-to-end
+    ├── ci.yml                   five jobs: Linux, mutation testing (Linux and Windows), Windows, Windows service end-to-end
     └── soak.yml                 manually started long run on both operating systems
 ```
 
@@ -791,7 +791,7 @@ Every row except the Accept click in row 11 and the reboot in row 12 is executed
 
 ### 14.5 Continuous integration (`.github/workflows/ci.yml`)
 
-Runs on every push and pull request. Four jobs, all required to pass:
+Runs on every push and pull request. Five jobs, all required to pass:
 
 | Job | Runner | Steps |
 |---|---|---|
@@ -799,6 +799,7 @@ Runs on every push and pull request. Four jobs, all required to pass:
 | `windows` | `windows-latest` | `cargo clippy --all-targets -- -D warnings` · `cargo test` (MSVC, static CRT) · `cmake -A x64` build + `ctest` for the child |
 | `windows-service` | `windows-latest`, `needs: [windows]` | end-to-end run of the real service (below) |
 | `mutants` | `ubuntu-latest` | `cargo mutants -j 2` with the policy in `agent-rust/.cargo/mutants.toml`; fails if any mutant of the portable or Unix code survives; uploads `mutants.out` |
+| `mutants-windows` | `windows-latest` | `cargo mutants -j 2 --config .cargo/mutants-windows.toml` over the Windows-only sources with the library unit tests; fails if a mutant outside the documented exclusions survives; uploads `mutants.out` |
 
 `windows-service` runs only after `windows` is green, so a compile or unit-test failure is
 never diagnosed as a service failure. The GitHub runner account is an administrator, which
@@ -918,8 +919,14 @@ excluded by name in `.cargo/mutants.toml`, each with its reason: `is_privileged`
 `false` and `prepare_child` doing nothing are killed only by the root-level tier, which that
 job does not run; `LOCK_EX ^ LOCK_NB` is equivalent to `LOCK_EX | LOCK_NB` because the two
 flags share no bits. The first pass left 13 alive and drove five new tests plus the removal
-of an unreachable `chown` (§6.2). The Windows-only files are not mutated; their tests run on
-the Windows job without instrumentation.
+of an unreachable `chown` (§6.2). The `mutants-windows` job does the same for
+`platform/windows.rs`, `service/windows.rs` and `service/eventlog.rs` on the Windows runner
+with the policy in `.cargo/mutants-windows.toml`, running the library unit tests per mutant:
+92 mutants, 80 killed, 12 unviable, 0 missed. Functions only the end-to-end job can exercise
+(dispatcher, `ServiceMain`, install, uninstall, state polling, the UAC relaunch) are excluded
+by name, and fourteen mutants are excluded as equivalent, each with its reason in the policy
+file. The first Windows pass left 33 alive and drove six unit tests and the removal of two
+redundant status fields.
 
 Not counted by either coverage figure: `ServiceMain` under the
 real Service Control Manager and the SCM's state-polling loops, which the end-to-end job
