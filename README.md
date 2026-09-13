@@ -342,7 +342,12 @@ Run on a clean Windows 11 or Server 2022 machine after `install.ps1`:
 | 13 | `flamingo-agent.exe --uninstall` | `sc query` reports the service does not exist |
 
 Every row except the Accept click in row 10 and the reboot in row 11 is executed by the
-`windows-service` CI job on every push, and its output is pasted below.
+`windows-service` CI job on every push, on three Windows images, and its output is pasted
+below. A hosted runner cannot reboot; the registration it verifies is `AUTO_START` under
+`LocalSystem`, and the Service Control Manager cold-starts the service in session 0 on every
+run, which is the path boot uses. Each run also publishes the two installed binaries as the
+artifact `flamingo-binaries-<image>`, so the reboot check needs no toolchain on whichever
+machine performs it.
 
 ## Verification evidence
 
@@ -662,15 +667,16 @@ C:\Users\RUNNER~1\AppData\Local\Temp\rotation-logs\child.1.log BUILTIN\Administr
 
 ## Verified / not verified
 
-- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs five jobs. The Linux job: rustfmt, clippy with warnings denied, `cargo deny` and `cargo audit`, unit and integration tests, the root-level tests under `sudo` (failing the build if that job is not actually root), a 90% line-coverage floor via `cargo llvm-cov`, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target. The two mutation-testing jobs: `cargo mutants` over the portable and Unix code on Linux and over the Windows-only files on Windows, failing if a mutant survives. The Windows job: clippy, unit and integration tests under MSVC with a static CRT, a 78% line-coverage floor, and the child's CTest suite. The end-to-end job, run on both the Server 2025 and the Server 2022 images, installs the service through `install.ps1` and verifies the registered configuration and recovery actions, the log output, the exact ACL on `child.log`, the event log registration and the start event, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, refusal of planted log locations, refusal of a second instance, a clean interactive Ctrl+C stop, a hard-killed agent taking its child with it, that neither binary imports the VC++ runtime, and the bootstrap-failure and stop events; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised.
+- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs five jobs. The Linux job: rustfmt, clippy with warnings denied, `cargo deny` and `cargo audit`, unit and integration tests, the root-level tests under `sudo` (failing the build if that job is not actually root), a 90% line-coverage floor via `cargo llvm-cov`, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target. The two mutation-testing jobs: `cargo mutants` over the portable and Unix code on Linux and over the Windows-only files on Windows, failing if a mutant survives. The Windows job: clippy, unit and integration tests under MSVC with a static CRT, a 78% line-coverage floor, and the child's CTest suite. The end-to-end job, run on the Server 2025, Server 2022 and Windows 11 ARM64 images, installs the service through `install.ps1`, publishes the two installed binaries as an artifact, and verifies the registered configuration and recovery actions, the log output, the exact ACL on `child.log`, the event log registration and the start event, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, refusal of planted log locations, refusal of a second instance, a clean interactive Ctrl+C stop, a hard-killed agent taking its child with it, that neither binary imports the VC++ runtime, and the bootstrap-failure and stop events; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised.
 - **Linux:** unit, integration and child tests pass; an interactive run under `sudo`
   produces a root-owned `0600` log.
-- **Windows:** the end-to-end CI job above, run on both the Windows Server 2025 and the
-  Windows Server 2022 images, including the standard-user denial, the UAC decline path and
-  the interactive Ctrl+C stop; only the UAC Accept click and an actual reboot are listed as
-  not executed. Windows 10 and 11 client editions have no x64 hosted runner and were not
-  exercised; the APIs used have been stable since Windows Vista, and job objects need
-  Windows 8 or later.
+- **Windows:** the end-to-end CI job above, run on three hosted images, Windows Server
+  2025, Windows Server 2022 and Windows 11 (ARM64, the only hosted client image, built
+  natively for ARM64), including the standard-user denial, the UAC decline path and the
+  interactive Ctrl+C stop; only the UAC Accept click and an actual reboot are listed as not
+  executed. Windows 10 and Windows 11 on x64 have no hosted runner and were not exercised
+  directly; the same binaries and checks pass on x64 Server and on ARM64 client, and the
+  APIs used have been stable since Windows Vista (job objects need Windows 8 or later).
 - **macOS:** compiles; not executed.
 
 ## Design notes
@@ -708,6 +714,8 @@ it. The seven points most worth knowing:
   exits with code 5 and writes nothing (an exclusive lock on `agent.lock`, released by the
   kernel when the holder dies). Two agents on different directories are not prevented.
 - Binaries are unsigned; SmartScreen may warn on first interactive launch.
+- Windows 10 and Windows 11 on x64 are not exercised by CI (no hosted runner); Server 2025,
+  Server 2022 and Windows 11 ARM64 are.
 - Linux/macOS: `--install` is not implemented. The mapping is a systemd unit
   (`Type=simple`, `ExecStart=/opt/flamingo/flamingo-agent`, `User=root`) or a launchd
   daemon plist; the agent loop already runs unchanged under either.

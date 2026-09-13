@@ -797,7 +797,7 @@ Runs on every push and pull request. Five jobs, all required to pass:
 |---|---|---|
 | `linux` | `ubuntu-latest` | `cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo deny check` (advisories, license allow-list, sources; policy in `deny.toml`) · `cargo audit` · `cargo test` · privileged Linux tests under `sudo` (`cargo test --test privileged_linux -- --ignored`) · restore target ownership (`always()`, so it runs even if the previous step failed) · install `cargo-llvm-cov` · coverage lcov (`cargo llvm-cov --all-targets --lcov`) · coverage line with `--fail-under-lines 90` · upload the lcov artifact · compile-check every Windows code path (`cargo check --target x86_64-pc-windows-gnu`) · `cmake` configure/build + `ctest` for the child |
 | `windows` | `windows-latest` | `cargo clippy --all-targets -- -D warnings` · `cargo test` (MSVC, static CRT) · `cmake -A x64` build + `ctest` for the child |
-| `windows-service` | matrix `windows-2025`, `windows-2022`; `needs: [windows]`; `fail-fast: false` | end-to-end run of the real service (below) on both server images |
+| `windows-service` | matrix `windows-2025`, `windows-2022`, `windows-11-arm`; `needs: [windows]`; `fail-fast: false` | end-to-end run of the real service (below) on two server images and the Windows 11 ARM64 client image (built natively); publishes the installed binaries as an artifact |
 | `mutants` | `ubuntu-latest` | `cargo mutants -j 2` with the policy in `agent-rust/.cargo/mutants.toml`; fails if any mutant of the portable or Unix code survives; uploads `mutants.out` |
 | `mutants-windows` | `windows-latest` | `cargo mutants -j 2 --config .cargo/mutants-windows.toml` over the Windows-only sources with the library unit tests; fails if a mutant outside the documented exclusions survives; uploads `mutants.out` |
 
@@ -951,7 +951,8 @@ VM. It proves compilation only, never behavior.
 
 **Windows VM (verification).** Windows 11 or Server 2022 evaluation image; `rustup` with the
 MSVC toolchain; Visual Studio Build Tools 2022 with the C++ workload; git. Snapshot the VM
-right after installing prerequisites so every checklist run starts clean.
+right after installing prerequisites so every checklist run starts clean. (In the event the
+hosted runners replaced the VM: see the outcome note under §15.2.)
 
 ### 15.2 Milestones — the risk comes first
 
