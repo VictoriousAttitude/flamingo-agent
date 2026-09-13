@@ -145,12 +145,15 @@ The tests fall into three tiers:
    quoting round-trips through a reference command-line parser and, on the Windows job, also
    against the real `CommandLineToArgvW`.
 2. **Privileged tests**: on Linux, a `sudo`-run job on the CI runner exercises the
-   root-owned `0600` log path and a full interactive run of the agent that is stopped with
-   `SIGINT`; these now fail the build on CI if the job is not actually root, rather than
-   silently reporting `skipped`. On Windows, the DACL tests — born-locked creation,
-   replacing an inherited ACL, recovering a file whose ACL denies write, and creating
-   missing parent directories — run under any Windows account, because the test process
-   owns every file it creates; the one test that actually needs elevation,
+   root-owned `0600` log path, a full interactive run of the agent that is stopped with
+   `SIGINT`, a hard `SIGKILL` of the agent that must take its child with it, refusal of a
+   log directory owned by another user, and a second agent on a running agent's log
+   directory that must exit with code 5; these fail the build on CI if the job is not
+   actually root, rather than silently reporting `skipped`. On Windows, the DACL tests —
+   born-locked creation, replacing an inherited ACL, recovering a file whose ACL denies
+   write, refusing a planted junction, and creating missing parent directories — together
+   with the job-object and instance-lock tests run under any Windows account, because the
+   test process owns every object it creates; the one test that actually needs elevation,
    `is_privileged_is_true_on_an_elevated_runner`, asserts that the CI runner's token is
    elevated.
 3. **The end-to-end job**, which installs the real Windows service and inspects it live.
