@@ -1,6 +1,6 @@
 [package]
 name = "flamingo-agent"
-version = "0.1.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Background agent that samples UTC time and process RSS every 5 seconds and launches a privileged logger child"
