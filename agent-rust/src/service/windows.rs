@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
 use windows_service::service::{
-    Service, ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl,
-    ServiceExitCode, ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
+    Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept,
+    ServiceErrorControl, ServiceExitCode, ServiceFailureActions, ServiceFailureResetPeriod,
+    ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
 };
 use windows_service::service_control_handler::{
     self, ServiceControlHandlerResult, ServiceStatusHandle,
@@ -158,6 +159,36 @@ fn service_info(exe: &Path) -> ServiceInfo {
     }
 }
 
+/// Delay before the SCM restarts the service after a failure.
+const RESTART_DELAY: Duration = Duration::from_secs(5);
+/// A failure-free stretch this long resets the attempt counter, so a service that has run
+/// well for a day gets a fresh set of restarts the next time it fails.
+const FAILURE_RESET_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// What the SCM does when the service fails: restart it twice, five seconds apart, then
+/// leave it stopped. A bounded count keeps a persistently broken deployment from restarting
+/// forever, while the reset period makes the bound apply per incident rather than per
+/// lifetime.
+fn recovery_policy() -> ServiceFailureActions {
+    let restart = ServiceAction {
+        action_type: ServiceActionType::Restart,
+        delay: RESTART_DELAY,
+    };
+    ServiceFailureActions {
+        reset_period: ServiceFailureResetPeriod::After(FAILURE_RESET_PERIOD),
+        reboot_msg: None,
+        command: None,
+        actions: Some(vec![
+            restart.clone(),
+            restart,
+            ServiceAction {
+                action_type: ServiceActionType::None,
+                delay: Duration::ZERO,
+            },
+        ]),
+    }
+}
+
 /// Register (or update) the service, start it, and wait until it reports Running.
 pub fn install(exe: &Path) -> Result<(), ServiceError> {
     let manager = ServiceManager::local_computer(
@@ -183,6 +214,11 @@ pub fn install(exe: &Path) -> Result<(), ServiceError> {
         Err(err) => return Err(ServiceError::Api(err)),
     };
     service.set_description(SERVICE_DESCRIPTION)?;
+    service.update_failure_actions(recovery_policy())?;
+    // Apply the policy to a non-zero exit as well as to a crash: a bootstrap failure that
+    // was transient (a volume not mounted yet, a directory briefly unavailable) then recovers
+    // on its own, and a persistent one stops after the bounded number of attempts.
+    service.set_failure_actions_on_non_crash_failures(true)?;
     // Only a fully stopped service is started: a StartPending one is already on its way and
     // starting it again fails with ERROR_SERVICE_ALREADY_RUNNING (1056).
     if service.query_status()?.current_state == ServiceState::Stopped {
@@ -251,6 +287,31 @@ fn wait_for_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The recovery policy is what the SCM applies when the service dies; its shape is
+    /// asserted here and its registration is verified live in CI with `sc qfailure`.
+    #[test]
+    fn recovery_policy_restarts_twice_then_gives_up() {
+        let policy = recovery_policy();
+        assert_eq!(
+            policy.reset_period,
+            ServiceFailureResetPeriod::After(Duration::from_secs(86_400))
+        );
+        assert!(policy.reboot_msg.is_none() && policy.command.is_none());
+        let actions = policy.actions.expect("actions are set");
+        let kinds: Vec<_> = actions.iter().map(|a| a.action_type).collect();
+        assert_eq!(
+            kinds,
+            [
+                ServiceActionType::Restart,
+                ServiceActionType::Restart,
+                ServiceActionType::None
+            ]
+        );
+        assert!(actions[..2]
+            .iter()
+            .all(|a| a.delay == Duration::from_secs(5)));
+    }
 
     /// The three status reports the SCM sees. `wait_hint` is the contract that keeps the SCM
     /// from declaring the service hung during start-up and stop, and a `Stopped` report must
