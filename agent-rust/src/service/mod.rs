@@ -52,11 +52,22 @@ pub enum ServiceError {
     /// The previous registration is still being deleted, so it cannot be recreated yet.
     #[error("a previous FlamingoAgent registration is still being removed; close the Services console and any other handle to the service, then retry")]
     MarkedForDelete,
+    /// A registry call made while registering or removing the event source failed.
+    #[cfg(windows)]
+    #[error("registering the event log source: {call} failed with error {code}")]
+    Registry {
+        /// The failing registry API.
+        call: &'static str,
+        /// The Win32 error code it returned.
+        code: u32,
+    },
     /// No service manager on this platform.
     #[error("Windows service registration is not supported on this platform; see README for the systemd/launchd mapping")]
     Unsupported,
 }
 
+#[cfg(windows)]
+pub mod eventlog;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]

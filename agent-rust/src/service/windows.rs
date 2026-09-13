@@ -19,6 +19,10 @@ use windows_service::service_control_handler::{
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, service_dispatcher};
 
+use super::eventlog::{
+    self, EventSource, EVENT_BAD_ARGUMENTS, EVENT_BOOTSTRAP_FAILED, EVENT_PANIC, EVENT_STARTED,
+    EVENT_STOPPED,
+};
 use super::{Dispatch, ServiceError, SERVICE_DESCRIPTION, SERVICE_DISPLAY_NAME, SERVICE_NAME};
 use crate::app;
 use crate::cli::Cli;
@@ -87,19 +91,44 @@ fn run_service() -> windows_service::Result<()> {
 
     status.set_service_status(pending(ServiceState::StartPending))?;
 
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
-        Err(_) => {
-            return status.set_service_status(stopped(ServiceExitCode::ServiceSpecific(
-                EXIT_BAD_ARGUMENTS,
-            )))
+    // Lifecycle facts also go to the Application event log (design §4.3). Every call is
+    // best-effort: a log that cannot be written never changes what the service does.
+    let events = EventSource::open(SERVICE_NAME);
+    let report = |kind: EventKind, id: u32, message: String| {
+        if let Some(events) = &events {
+            match kind {
+                EventKind::Info => events.info(id, &message),
+                EventKind::Error => events.error(id, &message),
+            };
         }
     };
 
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            report(
+                EventKind::Error,
+                EVENT_BAD_ARGUMENTS,
+                format!("Flamingo Agent could not parse its registered command line: {err}"),
+            );
+            return status.set_service_status(stopped(ServiceExitCode::ServiceSpecific(
+                EXIT_BAD_ARGUMENTS,
+            )));
+        }
+    };
+    let agent_log = app::resolve_config(&cli)
+        .map(|cfg| cfg.agent_log.display().to_string())
+        .unwrap_or_else(|_| "agent.log".to_string());
+
     let ready_status = status;
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        app::run_agent_blocking(&cli, cancel, false, move || {
+        app::run_agent_blocking(&cli, cancel, false, || {
             let _ = ready_status.set_service_status(running());
+            report(
+                EventKind::Info,
+                EVENT_STARTED,
+                format!("Flamingo Agent started; details are logged to {agent_log}"),
+            );
         })
     }));
 
@@ -107,11 +136,50 @@ fn run_service() -> windows_service::Result<()> {
     // failed intermediate report here is deliberately ignored.
     let _ = status.set_service_status(pending(ServiceState::StopPending));
     let exit_code = match outcome {
-        Ok(Ok(())) => ServiceExitCode::Win32(0),
-        Ok(Err(_)) => ServiceExitCode::ServiceSpecific(EXIT_BOOTSTRAP_FAILED),
-        Err(_) => ServiceExitCode::ServiceSpecific(EXIT_PANIC),
+        Ok(Ok(())) => {
+            report(
+                EventKind::Info,
+                EVENT_STOPPED,
+                "Flamingo Agent stopped on request".to_string(),
+            );
+            ServiceExitCode::Win32(0)
+        }
+        Ok(Err(err)) => {
+            report(
+                EventKind::Error,
+                EVENT_BOOTSTRAP_FAILED,
+                format!("Flamingo Agent failed to start: {err:#}"),
+            );
+            ServiceExitCode::ServiceSpecific(EXIT_BOOTSTRAP_FAILED)
+        }
+        Err(payload) => {
+            report(
+                EventKind::Error,
+                EVENT_PANIC,
+                format!(
+                    "Flamingo Agent stopped after a panic: {}; see {agent_log}",
+                    panic_message(payload.as_ref())
+                ),
+            );
+            ServiceExitCode::ServiceSpecific(EXIT_PANIC)
+        }
     };
     status.set_service_status(stopped(exit_code))
+}
+
+#[derive(Clone, Copy)]
+enum EventKind {
+    Info,
+    Error,
+}
+
+/// The text of a panic payload, when it is one of the two forms `panic!` produces.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("(non-string panic payload)")
 }
 
 fn pending(state: ServiceState) -> ServiceStatus {
@@ -219,6 +287,8 @@ pub fn install(exe: &Path) -> Result<(), ServiceError> {
     // was transient (a volume not mounted yet, a directory briefly unavailable) then recovers
     // on its own, and a persistent one stops after the bounded number of attempts.
     service.set_failure_actions_on_non_crash_failures(true)?;
+    // Registered before the first start so even the first lifecycle event renders.
+    eventlog::register_source(SERVICE_NAME)?;
     // Only a fully stopped service is started: a StartPending one is already on its way and
     // starting it again fails with ERROR_SERVICE_ALREADY_RUNNING (1056).
     if service.query_status()?.current_state == ServiceState::Stopped {
@@ -256,7 +326,7 @@ pub fn uninstall() -> Result<(), ServiceError> {
         }
     }
     service.delete()?;
-    Ok(())
+    eventlog::unregister_source(SERVICE_NAME)
 }
 
 fn wait_for_state(
@@ -287,6 +357,16 @@ fn wait_for_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panic_message_reads_both_payload_forms() {
+        let s: Box<dyn std::any::Any + Send> = Box::new("static text");
+        assert_eq!(panic_message(s.as_ref()), "static text");
+        let s: Box<dyn std::any::Any + Send> = Box::new(String::from("owned text"));
+        assert_eq!(panic_message(s.as_ref()), "owned text");
+        let s: Box<dyn std::any::Any + Send> = Box::new(7u8);
+        assert_eq!(panic_message(s.as_ref()), "(non-string panic payload)");
+    }
 
     /// The recovery policy is what the SCM applies when the service dies; its shape is
     /// asserted here and its registration is verified live in CI with `sc qfailure`.
