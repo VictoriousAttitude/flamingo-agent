@@ -4,7 +4,8 @@ Windows background service in Rust that samples two metrics every 5 seconds, lau
 privileged C++ child with those metrics, and keeps the child's log readable only by
 Administrators and SYSTEM. Portable core, Windows fully implemented, POSIX mapped.
 
-Date: 2026-09-11. Status: approved design, pre-implementation.
+Written 2026-09-11 before implementation and kept current through the hardening work of
+2026-09-13. Status: implemented; every mitigation and test named below exists in the tree.
 
 ---
 
@@ -669,21 +670,25 @@ Visual Studio Build Tools 2022 with the C++ workload (which bundles CMake). Noth
 
 ## 14. Testing strategy
 
-Principle: everything portable is tested automatically on Linux; everything Windows-specific
-is verified on a Windows VM against a written checklist with expected output; anything not
-exercised is named as such.
+Principle: everything portable is tested automatically on Linux and Windows; everything
+Windows-specific is verified against the written checklist (§14.4) by the end-to-end CI job
+on a real Windows runner, with its output pasted into the README; anything not exercised is
+named as such.
 
 ### 14.1 Unit tests (`cargo test`, any OS)
 
 | Module | Cases |
 |---|---|
-| `metrics` | RFC 3339 format ends in `Z`; RSS is `Some` and `> 0` on this platform |
+| `metrics` | RFC 3339 format ends in `Z`; RSS is at least 1 MiB on this platform (a constant reading would pass `> 0`); the first `memory_stats` call is serialized across threads (`metrics_first_call`) |
 | `child` | argv builder yields the exact expected sequence; outcome classification for exit 0 / non-zero / timeout / spawn error |
 | `cli` | `--install`, `--uninstall`, bare, and every override parse; conflicting flags rejected |
 | `config` | path resolution relative to a fake exe location |
-| `platform::unix` | on a temp dir: dir `0700`, file `0600`, re-apply fixes a `0644` file; owner asserted by the root-level tier |
+| `platform::unix` | on a temp dir: dir `0700`, file `0600`, re-apply fixes a `0644` file; owner asserted by the root-level tier; a planted symbolic link is refused for both the directory and the file; an inspection error other than "not found" surfaces as such; a second instance lock on the same directory is refused until the first is dropped |
 | `platform::winquote` | a property-based test (`quoting_round_trips_through_the_reference_parser`) checks quoting round-trips through a reference command-line parser for randomly generated arguments; a fixed set of tricky arguments is additionally checked against the real `CommandLineToArgvW` on the Windows job |
-| `platform::windows` | elevation is reported `true` on the elevated CI runner (`is_privileged_is_true_on_an_elevated_runner`); a file whose ACL denies write is recovered by re-applying the DACL (`secure_file_recovers_a_file_that_denies_write`); the log directory is created when its parent does not yet exist (`secure_dir_creates_missing_parents`) |
+| `platform::windows` | elevation is reported `true` on the elevated CI runner (`is_privileged_is_true_on_an_elevated_runner`); a file whose ACL denies write is recovered by re-applying the DACL (`secure_file_recovers_a_file_that_denies_write`); the log directory is created when its parent does not yet exist (`secure_dir_creates_missing_parents`); a planted junction is refused (`secure_dir_refuses_a_junction`); a kill-on-close job object terminates its processes when the handle closes (`job_object_kills_its_processes_when_closed`); a second instance lock is refused until the first is dropped |
+| `app` | the relaunch exit-code mapping and its stderr line; the panic hook writes the panic into the log (captured through a thread-local subscriber); a child timeout not below the period is rejected |
+| `service::windows` | the recovery policy's shape (`recovery_policy_restarts_twice_then_gives_up`); status builders; service info; both panic payload forms are rendered |
+| `service::eventlog` | an unregistered source can still report; registering and removing the source under HKLM round-trips on an elevated runner |
 | `agent` | with period = 50 ms and a counting cycle: N ticks in ~N·50 ms; cancellation stops within one period; a cycle that returns `Err` does not stop the loop; a cycle that **panics** does not stop the loop |
 
 ### 14.2 Integration tests (`agent-rust/tests/`, any OS)
@@ -697,12 +702,22 @@ the spawn path is tested without a C++ toolchain:
 - non-existent path → outcome `spawn failed`
 - a full cycle re-applies the DACL to the child log after it is deleted mid-run
   (`dacl_is_reapplied_after_the_log_is_deleted`)
+- the whole bootstrap-and-loop path in one process, unprivileged, against a temporary
+  directory: cancelled after its first cycles, it must have logged the protection string,
+  every cycle and its clean stop (`tests/app_run.rs`)
+- the real binary: `--help`, `--version`, conflicting flags as a usage error, `--install`
+  unsupported off Windows, and an unprivileged run that must exit 3 within a bounded wait
+  (`tests/cli_run.rs`)
 
 Root-only tests live separately in `tests/privileged_linux.rs`, `#[ignore]`d by default so an
 unprivileged `cargo test` stays green: a root-owned `0700`/`0600` log path
-(`secure_paths_are_root_owned_0600`), and a full interactive run of the real binary, stopped
-with `SIGINT`, that completes two cycles cleanly (`interactive_run_under_root_completes_two_cycles`).
-CI runs them under `sudo` as a separate step (§14.5).
+(`secure_paths_are_root_owned_0600`); a full interactive run of the real binary, stopped
+with `SIGINT`, that completes two cycles cleanly (`interactive_run_under_root_completes_two_cycles`);
+a second agent on a running agent's log directory exiting 5 without writing to its log
+(`second_agent_on_the_same_log_directory_exits_5`); a `SIGKILL`ed agent whose child must be
+gone within 3 s (`hard_killed_agent_takes_its_child_with_it`); and a log directory owned by
+another user being refused (`foreign_owned_log_directory_is_refused`). CI runs them under
+`sudo` as a separate step (§14.5) and fails the build if that step is not actually root.
 
 ### 14.3 Child tests (`ctest`, any OS)
 
@@ -816,9 +831,11 @@ Stated verbatim in the README so the reviewer knows what was actually run:
 - **Linux:** unit, integration, and child tests pass; interactive run under `sudo` produces
   a root-owned `0600` log.
 - **Windows:** the `windows-service` CI job (§14.5), with its output pasted: `sc qc`,
-  `agent.log`, `icacls`, stop/uninstall, missing-child recovery, standard-user denial, the
-  UAC decline path, the interactive Ctrl+C stop and the import-table check. The two items that
-  need a human — the UAC Accept click and an actual reboot — are listed as not executed.
+  `sc qfailure`, `agent.log`, `icacls`, stop/uninstall, missing-child recovery, standard-user
+  denial, the UAC decline path, planted log locations refused, a second instance refused, the
+  interactive Ctrl+C stop, the hard-kill child cleanup, the event log records and the
+  import-table check. The two items that need a human — the UAC Accept click and an actual
+  reboot — are listed as not executed.
 - **macOS:** compiles; not executed.
 
 ### 14.7 Coverage and tiers
@@ -924,13 +941,13 @@ in ten minutes and see the evidence without reading code.
 5. **Running interactively** — the bare invocation, the UAC prompt, Ctrl-C.
 6. **Where the logs are and what a line looks like** — one real `agent.log` excerpt and one
    real `child.log` excerpt.
-7. **Testing** — `cargo test`, `ctest`, and the Windows checklist from §14.4 with the
-   actual output pasted for items 2, 6, and 9. Item 7 (the standard-user `runas` denial)
-   needs an interactive session and is listed as not executed, not pasted.
+7. **Testing** — `cargo test`, `ctest`, the test tiers, coverage and mutation figures, and
+   the Windows checklist from §14.4 with the end-to-end job's actual output pasted.
 8. **Verified / not verified** — verbatim from §14.6, plus a statement of what CI proves and
    does not prove (§14.5). No badge: the repository is private, so a badge would not render
    for the reviewer.
-9. **Design notes** — link to `docs/design.md`, plus the five points a reviewer most needs
-   inline: protected DACL and why the directory is locked, why no elevation in service mode,
-   the cycle isolation guarantees, static CRT, and the platform boundary rule.
+9. **Design notes** — link to `docs/design.md` and its threat model, plus the seven points a
+   reviewer most needs inline: protected DACL and why the directory is locked, why no
+   elevation in service mode, the cycle isolation guarantees, static CRT, the platform
+   boundary rule, child lifetime binding, and event log reporting.
 10. **Limitations and next steps** — the non-goals from §1, and the systemd/launchd mapping.
