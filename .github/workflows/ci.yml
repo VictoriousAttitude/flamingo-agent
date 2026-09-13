@@ -243,6 +243,31 @@ jobs:
           if ($text -notmatch 'already holds the lock') { throw 'expected the already-running message' }
           $q = sc.exe query FlamingoAgent | Out-String
           if ($q -notmatch 'RUNNING') { throw "the service was disturbed: $q" }
+      # Both logs rotate by size and the rotated generations keep the lock: a small limit
+      # forces several rotations in 24 s, and icacls on a rotated file must show the same
+      # two entries as the live one, with nothing inherited.
+      - name: Logs rotate by size and rotated files keep the lock
+        shell: pwsh
+        run: |
+          $logs = Join-Path $env:TEMP 'rotation-logs'
+          $agent = "$env:ProgramFiles\FlamingoAgent\flamingo-agent.exe"
+          $p = Start-Process -FilePath $agent -ArgumentList @('--log-dir', "`"$logs`"", '--period-secs', '2', '--child-timeout-secs', '1', '--log-max-bytes', '1024', '--log-keep', '2') -PassThru
+          Start-Sleep -Seconds 24
+          if ($p.HasExited) { throw "agent exited early with $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+          Get-ChildItem $logs | ForEach-Object { Write-Host ("{0,-14} {1,6} bytes" -f $_.Name, $_.Length) }
+          foreach ($name in 'agent.log', 'agent.1.log', 'agent.2.log', 'child.log', 'child.1.log') {
+            if (-not (Test-Path (Join-Path $logs $name))) { throw "$name is missing" }
+          }
+          if (Test-Path (Join-Path $logs 'agent.3.log')) { throw 'agent.3.log exists: keep = 2 was not honoured' }
+          foreach ($name in 'agent.1.log', 'child.1.log') {
+            $acl = icacls (Join-Path $logs $name) | Out-String
+            Write-Host $acl
+            if ($acl -match '\(I\)') { throw "$name has inherited entries" }
+            if ($acl -notmatch 'BUILTIN\\Administrators:\(F\)' -or $acl -notmatch 'NT AUTHORITY\\SYSTEM:\(F\)') { throw "$name lost the lock" }
+            if (([regex]::Matches($acl, ':\(')).Count -ne 2) { throw "$name has more than two entries" }
+          }
+          if (-not (Select-String -Path (Join-Path $logs 'agent*.log') -Pattern 'child log rotated' -Quiet)) { throw 'no child log rotation was logged' }
       # Checklist row 9: with the child binary gone the service must keep running and log a
       # spawn failure every cycle, then recover once the binary is back. Renaming a running
       # image is allowed on Windows, but the move still retries briefly in case the file is
