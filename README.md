@@ -11,7 +11,7 @@ Windows is the fully implemented platform.
 ├── logger-child/     C++17 child: logs its arguments to stdout and an ACL-protected file
 ├── install.ps1       Build both, install under Program Files, register the service
 ├── docs/design.md    Design document (architecture, security notes, test strategy)
-└── .github/          CI: Linux + Windows on every push
+└── .github/          CI: four jobs on every push (Linux, mutation testing, Windows, Windows service end-to-end)
 ```
 
 ## Confirmed interpretations
@@ -114,7 +114,7 @@ implicit right to change the DACL, so a foreign owner could undo the lock). Anyt
 makes the agent refuse to start with a clear message; it never takes ownership of a planted
 object. On Linux the same rule applies to symbolic links and to a directory owned by another
 user. This is proven in CI: a standard account plants a directory and a junction, and the
-agent refuses both (evidence block 11).
+agent refuses both (evidence block 12).
 
 ## Testing
 
@@ -129,8 +129,10 @@ cmake -S logger-child -B logger-child/build && cmake --build logger-child/build 
 
 What the tests cover: timestamp format, RSS availability, argument encoding, CLI validation,
 path resolution, `0700`/`0600` protection on Unix, protected-DACL application on Windows,
-child spawn/timeout/failure/cancellation paths, the loop surviving errors and panics, and
-the child's exit codes and append-only behavior.
+refusal of planted symbolic links, junctions and foreign-owned objects, the instance lock,
+the kill-on-close job object, event log reporting, child spawn/timeout/failure/cancellation
+paths, the loop surviving errors and panics, the whole bootstrap-and-loop path in one
+process, and the child's exit codes and append-only behavior.
 
 ### Coverage and test tiers
 
@@ -408,7 +410,7 @@ exit 5: flamingo-agent: acquiring the instance lock: another agent instance alre
 
 ## Verified / not verified
 
-- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs a Linux job (rustfmt, clippy with warnings denied, unit and integration tests, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target) and a Windows job (clippy, unit and integration tests under MSVC with a static CRT, and the child's CTest suite). CI proves compilation and tests on both operating systems. A third job installs the service through `install.ps1` on the Windows runner and verifies the registered configuration, the log output, the exact ACL on `child.log`, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, a clean interactive Ctrl+C stop, and that neither binary imports the VC++ runtime; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised. The Linux job also runs the root-level tests under `sudo` (failing the build if that job is not actually root) and enforces an 84% line-coverage floor via `cargo llvm-cov`.
+- **CI (GitHub Actions, on every push):** `.github/workflows/ci.yml` runs four jobs. The Linux job: rustfmt, clippy with warnings denied, `cargo deny` and `cargo audit`, unit and integration tests, the root-level tests under `sudo` (failing the build if that job is not actually root), an 84% line-coverage floor via `cargo llvm-cov`, the child's CTest suite, and a compile check of every Windows code path via the `x86_64-pc-windows-gnu` target. The mutation-testing job: `cargo mutants` over the portable and Unix code, failing if a mutant survives. The Windows job: clippy, unit and integration tests under MSVC with a static CRT, a 72% line-coverage floor, and the child's CTest suite. The end-to-end job installs the service through `install.ps1` on the Windows runner and verifies the registered configuration and recovery actions, the log output, the exact ACL on `child.log`, the event log registration and the start event, recovery from a missing child binary, denial of a standard user, the UAC decline path under the auto-deny policy, refusal of planted log locations, refusal of a second instance, a clean interactive Ctrl+C stop, a hard-killed agent taking its child with it, that neither binary imports the VC++ runtime, and the bootstrap-failure and stop events; it then stops, uninstalls and reinstalls the service. Only the UAC Accept click and an actual reboot are not exercised.
 - **Linux:** unit, integration and child tests pass; an interactive run under `sudo`
   produces a root-owned `0600` log.
 - **Windows:** the end-to-end CI job above, including the standard-user denial, the UAC
@@ -420,7 +422,7 @@ exit 5: flamingo-agent: acquiring the instance lock: another agent instance alre
 
 See [`docs/design.md`](docs/design.md). Its §11.1 is the threat model: the attacker
 considered, eighteen vectors, the mitigation for each, and the test or CI step that proves it,
-including the two vectors that are deliberately not mitigated. The six points most worth
+including the one vector that is deliberately not mitigated. The seven points most worth
 knowing:
 
 1. **Protected DACL, directory included** — see "How the ACL is enforced".
