@@ -611,6 +611,100 @@ mod tests {
         acquire_instance_lock(tmp.path()).expect("lock is free once the holder is gone");
     }
 
+    /// The attributes handed to `CreateFileW` and `CreateDirectoryW` must carry the parsed
+    /// descriptor: that is what makes the objects born locked rather than locked afterwards.
+    #[test]
+    fn security_attributes_carry_the_descriptor() {
+        let descriptor = SecurityDescriptor::from_sddl(FILE_SDDL).unwrap();
+        let attributes = descriptor.attributes();
+        assert_eq!(
+            attributes.nLength as usize,
+            std::mem::size_of::<SECURITY_ATTRIBUTES>()
+        );
+        assert_eq!(attributes.lpSecurityDescriptor, descriptor.0);
+        assert_eq!(attributes.bInheritHandle, 0);
+    }
+
+    /// The owner check must tell well-known SIDs apart rather than accept any owner.
+    #[test]
+    fn well_known_sid_comparison_tells_sids_apart() {
+        use windows_sys::Win32::Security::WinWorldSid;
+        let mut buffer = [0u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut size = buffer.len() as u32;
+        // SAFETY: the buffer is SECURITY_MAX_SID_SIZE bytes, the largest a SID can be.
+        let ok = unsafe {
+            CreateWellKnownSid(
+                WinWorldSid,
+                ptr::null_mut(),
+                buffer.as_mut_ptr().cast::<c_void>(),
+                &mut size,
+            )
+        };
+        assert_ne!(ok, 0);
+        let everyone: PSID = buffer.as_mut_ptr().cast::<c_void>();
+        assert!(well_known_sid_equals(WinWorldSid, everyone).unwrap());
+        assert!(!well_known_sid_equals(WinBuiltinAdministratorsSid, everyone).unwrap());
+        assert!(!well_known_sid_equals(WinLocalSystemSid, everyone).unwrap());
+    }
+
+    /// `secure_file` must not keep a handle to the file it creates: the create handle shares
+    /// read and write only, so a leaked one would make the file undeletable.
+    #[test]
+    fn secure_file_closes_its_handle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("child.log");
+        secure_file(&path).unwrap();
+        fs::remove_file(&path).expect("no handle may remain open on the file");
+    }
+
+    /// A planted file symbolic link must be refused like a junction: following it would send
+    /// SYSTEM's writes wherever the planter chose. Creating one needs the symbolic-link
+    /// privilege, which an elevated token (the CI runner) has.
+    #[test]
+    fn secure_file_refuses_a_symbolic_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target.log");
+        fs::write(&target, "x").unwrap();
+        let link = tmp.path().join("planted.log");
+        let status = Command::new("cmd")
+            .args(["/c", "mklink"])
+            .arg(&link)
+            .arg(&target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        if !status.success() {
+            eprintln!("skipped: mklink needs the symbolic-link privilege");
+            return;
+        }
+        let err = secure_file(&link).unwrap_err();
+        assert!(
+            matches!(&err, PlatformError::Untrusted { reason, .. } if reason.contains("reparse point")),
+            "{err}"
+        );
+    }
+
+    /// `bind_child` must actually place the child in the agent's job; the kernel reports the
+    /// membership. (The job itself is process-wide and stays open, as in production.)
+    #[tokio::test]
+    async fn bind_child_places_the_child_in_the_job() {
+        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+        let mut child = tokio::process::Command::new("ping")
+            .args(["-n", "3", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        bind_child(&child).unwrap();
+        let process = child.raw_handle().unwrap() as HANDLE;
+        let mut in_job = 0;
+        // SAFETY: both handles are valid; `in_job` is a valid out-pointer.
+        let ok = unsafe { IsProcessInJob(process, child_job().unwrap(), &mut in_job) };
+        assert_ne!(ok, 0, "{}", std::io::Error::last_os_error());
+        assert_ne!(in_job, 0, "the child is not in the agent's job");
+        child.kill().await.unwrap();
+    }
+
     /// A planted junction must be refused, not followed: as SYSTEM the agent would otherwise
     /// lock and write wherever the planter pointed it. Junctions need no privilege to create.
     #[test]

@@ -208,8 +208,98 @@ mod tests {
         unregister_source("FlamingoAgentTestSource").unwrap();
         register_source("FlamingoAgentTestSource", &exe).unwrap();
         register_source("FlamingoAgentTestSource", &exe).expect("idempotent");
+        let (file, kind) = read_string_value("FlamingoAgentTestSource", "EventMessageFile");
+        assert_eq!(file, exe.display().to_string());
+        assert_eq!(kind, REG_EXPAND_SZ);
+        assert_eq!(
+            read_dword_value("FlamingoAgentTestSource", "TypesSupported"),
+            TYPES_SUPPORTED
+        );
         unregister_source("FlamingoAgentTestSource").unwrap();
+        assert!(
+            !key_exists("FlamingoAgentTestSource"),
+            "the registration must be gone after unregister"
+        );
         unregister_source("FlamingoAgentTestSource").expect("absent key is not an error");
+    }
+
+    /// `ReportEventW` refuses a string above its documented limit of 31,839 characters, so
+    /// the boolean the source returns reflects the call, not a constant. (Leaves one error
+    /// test event in the Application log of the machine running the tests.)
+    #[test]
+    fn report_returns_false_when_the_event_log_refuses() {
+        let source = EventSource::open("FlamingoAgentTestSource").expect("open");
+        assert!(source.error(
+            EVENT_BOOTSTRAP_FAILED,
+            "flamingo-agent unit test error event"
+        ));
+        let too_long = "x".repeat(40_000);
+        assert!(!source.info(EVENT_STARTED, &too_long));
+        assert!(!source.error(EVENT_BOOTSTRAP_FAILED, &too_long));
+    }
+
+    fn read_string_value(source: &str, value: &str) -> (String, u32) {
+        use windows_sys::Win32::System::Registry::{
+            RegGetValueW, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+        };
+        let key_path = source_key(source);
+        let value = wide(OsStr::new(value));
+        let mut kind = 0u32;
+        let mut buffer = [0u16; 1024];
+        let mut size = (buffer.len() * 2) as u32;
+        // SAFETY: every pointer is valid for the call and `size` is the buffer's byte size.
+        let code = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key_path.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                &mut kind,
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        assert_eq!(code, ERROR_SUCCESS, "RegGetValueW failed with {code}");
+        let units = (size as usize / 2).saturating_sub(1);
+        (String::from_utf16_lossy(&buffer[..units]), kind)
+    }
+
+    fn read_dword_value(source: &str, value: &str) -> u32 {
+        use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_DWORD};
+        let key_path = source_key(source);
+        let value = wide(OsStr::new(value));
+        let mut data = 0u32;
+        let mut size = 4u32;
+        // SAFETY: every pointer is valid for the call and `size` is the buffer's byte size.
+        let code = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key_path.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_DWORD,
+                ptr::null_mut(),
+                (&mut data as *mut u32).cast(),
+                &mut size,
+            )
+        };
+        assert_eq!(code, ERROR_SUCCESS, "RegGetValueW failed with {code}");
+        data
+    }
+
+    fn key_exists(source: &str) -> bool {
+        use windows_sys::Win32::System::Registry::{RegOpenKeyExW, KEY_READ};
+        let key_path = source_key(source);
+        let mut key: HKEY = ptr::null_mut();
+        // SAFETY: `key_path` is NUL-terminated and `key` is a valid out-pointer.
+        let code =
+            unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, key_path.as_ptr(), 0, KEY_READ, &mut key) };
+        if code == ERROR_SUCCESS {
+            // SAFETY: `key` is open and closed exactly once.
+            unsafe { RegCloseKey(key) };
+            true
+        } else {
+            false
+        }
     }
 
     /// The message table `build.rs` embeds must resolve every lifecycle ID to its first
