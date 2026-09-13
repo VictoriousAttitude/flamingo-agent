@@ -25,9 +25,10 @@ Additional decisions stated to the author and accepted:
 - The memory metric is the **agent's own process RSS** (Working Set on Windows).
 - The child is **C++17**, built with CMake, standard library only.
 
-**Non-goals:** log rotation, Windows Event Log integration, code signing, remote reporting,
-configuration files. Each is noted in the README as a known limitation or next step. (A
-single-instance guard was originally a non-goal and was added later: see §11.1, vector 18.)
+**Non-goals:** log rotation, code signing, remote reporting, configuration files. Each is
+noted in the README as a known limitation or next step. (A single-instance guard and
+Application event log reporting were originally non-goals and were added later: see §11.1
+vector 18 and §4.3.)
 
 ---
 
@@ -146,6 +147,20 @@ scheduled, `StopPending` the moment cancellation is observed, and `Stopped` afte
 runtime has drained. Any panic escaping `ServiceMain` is caught at the boundary and reported
 as `Stopped` with a service-specific exit code so the SCM never sees a hung `StopPending`.
 
+**Application event log.** The service has no console and `agent.log` is readable only by
+administrators, so the lifecycle facts are also reported to the Application log under the
+source `FlamingoAgent` (`RegisterEventSourceW` / `ReportEventW`): event 1 started (with the
+`agent.log` path), 2 stopped on request, 3 failed to start (with the bootstrap error text),
+4 stopped after a panic (with the panic message), 5 registered command line did not parse.
+Events 1–2 are Information, 3–5 Error. Every report is best-effort: an event log that cannot
+be written never changes what the service does. `--install` registers the source under
+`HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\FlamingoAgent` with
+`EventMessageFile = %SystemRoot%\System32\eventcreate.exe` and `TypesSupported = 7`; that
+message file's table maps IDs 1–1000 to the first insertion string, so Event Viewer shows the
+text verbatim without a message DLL of our own. `--uninstall` removes the key. Proof: the
+end-to-end job reads events 1, 2 and 3 back with `Get-WinEvent` and checks the registry
+values (§14.5).
+
 ### 4.4 Interactive mode and elevation
 
 Interactive mode runs the identical loop with the cancellation token wired to `ctrl_c()`.
@@ -201,8 +216,8 @@ Steps 4 and 6 are the only fatal bootstrap errors: an agent that cannot secure i
 directory must not run, because the graded security property would be silently violated. In
 service mode the agent reports `Stopped` with `ServiceExitCode::ServiceSpecific(code)`,
 which is visible in `sc query` and is written by the SCM to the System event log
-("terminated with service-specific error"), so the failure is diagnosable without Event Log
-code of our own. Interactively it prints the error and exits 1. Everything after step 7 is
+("terminated with service-specific error"); the error text itself goes to the Application
+log as event 3 (§4.3). Interactively it prints the error and exits 1. Everything after step 7 is
 non-fatal by construction (§5.4).
 
 ---
@@ -443,6 +458,10 @@ the same values, so re-running `install.ps1` is safe.
 service-specific code (a transient bootstrap failure) is retried the same way as one that
 crashes. Bounded attempts keep a persistently broken deployment from restarting forever.
 Proof: the end-to-end job reads the configuration back with `sc qfailure` and `sc qfailureflag`.
+
+**Event source.** Before the first start, installation registers the `FlamingoAgent` event
+source (§4.3) so the very first lifecycle event renders as text; uninstallation removes the
+registration after deleting the service.
 
 `--uninstall` (elevated): open with `STOP | QUERY_STATUS | DELETE`; if running, send stop and
 poll status up to 15 s; then delete. A service marked for deletion while a handle is open is
@@ -761,6 +780,24 @@ is what makes the SCM and the ACL reachable from CI at all. The job:
     more, and finally requires `--uninstall` on the now-missing service to exit 1 with
     "not installed" — the idempotent-reinstall claim is therefore tested, not asserted.
 
+Steps added by the hardening work, in job order:
+
+12. reads the recovery configuration back with `sc qfailure` and `sc qfailureflag` (§7);
+13. reads the `FlamingoAgent` event source registration from the registry and the start event
+    (ID 1, Information, rendered text) with `Get-WinEvent` (§4.3);
+14. as the standard user, plants a directory and a junction where a log directory is
+    expected, and requires the elevated agent pointed at each to exit 1 with the refusal
+    message (§6.1 pre-planting);
+15. launches an interactive agent on the running service's log directory and requires exit 5
+    with the already-running message while the service stays `RUNNING` (§11.1 vector 18);
+16. kills an interactive agent with `Stop-Process -Force` and requires its child to be gone
+    within 3 s (§5.3 lifetime binding);
+17. swaps the registered command line for one the config check rejects, starts the service,
+    requires the bootstrap-failure event (ID 3, Error, with the error text) and
+    `SERVICE_EXIT_CODE 1`, then restores the command line and requires `RUNNING` again;
+18. on the clean stop, requires the stop event (ID 2) and, after uninstall, requires the event
+    source registration to be gone.
+
 CI therefore proves compilation, unit, integration and child tests on both operating systems,
 plus registration, cadence, the exact ACL, standard-user denial, the UAC decline path, a clean
 interactive stop and clean-machine startability on a real Windows machine. Two checklist items
@@ -768,8 +805,9 @@ remain manual by nature: clicking Accept on the UAC consent dialog (it happens o
 desktop) and an actual reboot (a hosted runner cannot restart itself). The README lists exactly
 those two as not executed.
 
-Toolchains are pinned to `stable` via `dtolnay/rust-toolchain`; the cross target is added
-with `rustup target add`. No secrets, no deployment step.
+The toolchain is pinned to 1.98.1 (`rust-toolchain.toml` and every `dtolnay/rust-toolchain`
+step) and every action to a commit SHA; the cross target is added with `rustup target add`.
+No secrets, no deployment step.
 
 ### 14.6 What is and is not verified
 

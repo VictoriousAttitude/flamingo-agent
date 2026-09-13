@@ -435,12 +435,17 @@ knowing:
    shutdown, every child is placed in a Windows job object with kill-on-close (on Linux, given
    the parent-death signal), so a hard kill or a crash of the agent terminates the child too.
    Proven by a root-level Linux test and an end-to-end CI step that kill the agent with force.
+7. **Lifecycle in the Application event log** — the service has no console and `agent.log`
+   is readable only by administrators, so started, stopped, failed-to-start (with the error
+   text), panicked and bad-arguments events go to the Application log under the source
+   `FlamingoAgent`. `--install` registers the source against a message file Windows ships,
+   so Event Viewer shows the text verbatim; `--uninstall` removes the registration. Every
+   report is best-effort and never changes what the service does. Proven by the end-to-end
+   job, which reads the start, stop and bootstrap-failure events back with `Get-WinEvent`.
 
 ## Limitations and next steps
 
 - No log rotation; both logs grow unbounded.
-- No Windows Event Log integration; the SCM records service-specific exit codes in the
-  System log, which covers start-up failures.
 - One agent per log directory: a second instance pointed at a directory another agent owns
   exits with code 5 and writes nothing (an exclusive lock on `agent.lock`, released by the
   kernel when the holder dies). Two agents on different directories are not prevented.
