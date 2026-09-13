@@ -516,12 +516,15 @@ The last three blocks come from run
 
 **15. The event source registration and the start event**
 
-`--install` registered the source; the value is read back unexpanded, and the start event is
-rendered as plain text by the registered message file:
+`--install` registered the source against the installed executable, whose build embeds the
+message table; the value is read back unexpanded, and the start event is rendered as plain
+text from that table (run
+[34769467505](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34769467505),
+commit `68cc27b`):
 
 ```
-EventMessageFile = %SystemRoot%\System32\eventcreate.exe (kind ExpandString); TypesSupported = 7
-09/13/2026 08:37:42 [1] Information: Flamingo Agent started; details are logged to C:\ProgramData\FlamingoAgent\agent.log
+EventMessageFile = C:\Program Files\FlamingoAgent\flamingo-agent.exe (kind ExpandString); TypesSupported = 7
+09/13/2026 16:49:35 [1] Information: Flamingo Agent started; details are logged to C:\ProgramData\FlamingoAgent\agent.log
 ```
 
 **16. A bootstrap failure reaches the event log**
