@@ -288,7 +288,7 @@ pub fn install(exe: &Path) -> Result<(), ServiceError> {
     // on its own, and a persistent one stops after the bounded number of attempts.
     service.set_failure_actions_on_non_crash_failures(true)?;
     // Registered before the first start so even the first lifecycle event renders.
-    eventlog::register_source(SERVICE_NAME)?;
+    eventlog::register_source(SERVICE_NAME, exe)?;
     // Only a fully stopped service is started: a StartPending one is already on its way and
     // starting it again fails with ERROR_SERVICE_ALREADY_RUNNING (1056).
     if service.query_status()?.current_state == ServiceState::Stopped {
