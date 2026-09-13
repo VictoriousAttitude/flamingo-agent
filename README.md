@@ -601,7 +601,28 @@ ok   RSS growth after warm-up: +55 KiB (early mean 13274 KiB, late mean 13329 Ki
 soak checks passed
 ```
 
-Longer runs are one command away (`gh workflow run soak.yml -f minutes=60`).
+The same run at sixty minutes (`Soak` run
+[34768661712](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34768661712)):
+1,801 cycles on Linux with resident memory flat at 8,572 KiB, 720 cycles of the Windows
+service with 38 KiB of drift, zero errors and zero warnings on either.
+
+```
+expected about 1800 cycles (60 min at 2 s)
+ok   metrics lines: 1801 (minimum 1620)
+ok   child completed lines: 1801 (minimum 1620)
+ok   RSS growth after warm-up: +0 KiB (early mean 8572 KiB, late mean 8572 KiB, max 8572 KiB, limit 2048 KiB)
+soak checks passed
+```
+
+```
+expected about 720 cycles (60 min at 5 s)
+ok   metrics lines: 720 (minimum 648)
+ok   child completed lines: 720 (minimum 648)
+ok   RSS growth after warm-up: +38 KiB (early mean 13345 KiB, late mean 13383 KiB, max 13420 KiB, limit 2048 KiB)
+soak checks passed
+```
+
+Longer runs are one command away (`gh workflow run soak.yml -f minutes=120`).
 
 **19. Both logs rotate by size and the rotated generations keep the lock** (run
 [34769714256](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34769714256),
