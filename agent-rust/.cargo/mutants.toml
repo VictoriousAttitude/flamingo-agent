@@ -1,0 +1,18 @@
+# cargo-mutants policy. The CI job fails when any mutant not listed here survives.
+
+# Windows-only code cannot be tested on the Linux runner that runs this job; its tests run
+# on the Windows job, uninstrumented.
+exclude_globs = ["src/platform/windows.rs", "src/service/windows.rs", "src/main.rs"]
+
+# Mutants that survive the unprivileged tiers by construction. Each is either caught by the
+# root-level tier (which this job does not run) or provably equivalent to the original.
+exclude_re = [
+    # Caught by the root-level tier: a root run that reports itself unprivileged exits 3
+    # instead of running (interactive_run_under_root_completes_two_cycles).
+    "replace is_privileged -> Result<bool, PlatformError> with Ok\\(false\\)",
+    # Caught by the root-level tier: without the parent-death signal the child outlives a
+    # hard-killed agent (hard_killed_agent_takes_its_child_with_it).
+    "replace prepare_child with \\(\\)",
+    # Equivalent: LOCK_EX (2) and LOCK_NB (4) share no bits, so | and ^ produce the same flags.
+    "replace \\| with \\^ in acquire_instance_lock",
+]

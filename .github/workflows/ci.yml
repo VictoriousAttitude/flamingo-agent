@@ -77,6 +77,34 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: ctest --test-dir logger-child/build --output-on-failure
 
+  mutants:
+    name: Mutation testing (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: agent-rust
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: agent-rust
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2
+        with:
+          tool: cargo-mutants
+      # Every mutant of the portable and Unix code must be killed by the unprivileged tiers;
+      # the policy in agent-rust/.cargo/mutants.toml lists the exclusions and why.
+      - name: cargo mutants
+        run: cargo mutants -j 2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: mutants-report
+          path: agent-rust/mutants.out
+
   windows:
     name: Windows (MSVC, static CRT)
     runs-on: windows-latest

@@ -5,6 +5,9 @@
 /agent-rust/target/
 /logger-child/build/
 /agent-rust/lcov.info
+/agent-rust/lcov-windows.info
+/agent-rust/mutants.out/
+/agent-rust/mutants.out.old/
 
 # Editor / OS noise
 .idea/
