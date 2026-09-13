@@ -108,14 +108,15 @@ stateDiagram-v2
         secure_child_log --> [*]
     }
     Bootstrap --> Running: event 1 "started"
-    Bootstrap --> Stopped_failed: refused path, planted object,
-second instance, bad arguments
+    StartPending --> Stopped_badargs: registered command line does not parse
+    Bootstrap --> Stopped_failed: refused path, planted object, second instance
     Running --> StopPending: SCM Stop / Shutdown, or Ctrl-C
     StopPending --> Stopped_ok: loop drains, runtime shut down (5 s bound)
     Running --> Stopped_panic: panic caught at the boundary
     Stopped_ok --> [*]: exit 0, event 2 "stopped"
     Stopped_failed --> [*]: exit 1, event 3 with the error text
     Stopped_panic --> [*]: exit 2, event 4
+    Stopped_badargs --> [*]: exit 3, event 5
     Stopped_failed --> StartPending: SCM recovery, 5 s delay, twice
     Stopped_panic --> StartPending: SCM recovery, 5 s delay, twice
 ```
