@@ -20,4 +20,7 @@ exclude_re = [
     "replace prepare_child with \\(\\)",
     # Equivalent: LOCK_EX (2) and LOCK_NB (4) share no bits, so | and ^ produce the same flags.
     "replace \\| with \\^ in acquire_instance_lock",
+    # Equivalent: std's File::flush is a no-op on every platform (the OS owns the buffer),
+    # so delegating to it and returning Ok(()) are the same operation.
+    "replace <impl Write for RotatingWriter>::flush -> io::Result<\\(\\)> with Ok\\(\\(\\)\\)",
 ]

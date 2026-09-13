@@ -100,6 +100,15 @@ mod tests {
         assert!(matches!(err, LoggingError::Path(_)), "{err:?}");
     }
 
+    /// A path ending in `..` has a parent but no file name; it must be rejected as a path,
+    /// not attempted as a file.
+    #[test]
+    fn path_with_parent_but_no_file_name_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = init(&tmp.path().join(".."), "info", false, TEST_ROTATION).unwrap_err();
+        assert!(matches!(err, LoggingError::Path(_)), "{err:?}");
+    }
+
     #[test]
     fn writes_events_to_the_file() {
         let tmp = tempfile::tempdir().unwrap();

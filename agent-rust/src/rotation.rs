@@ -214,8 +214,9 @@ mod tests {
     fn writer_rotates_before_exceeding_the_limit_and_loses_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let live = tmp.path().join("agent.log");
-        // 13-byte lines, a 27-byte limit: two lines per generation, six lines in total.
-        let mut w = RotatingWriter::open(&live, policy(27, 2)).unwrap();
+        // 13-byte lines, a 26-byte limit: a second line fills a generation exactly (the
+        // limit is inclusive), the third opens the next one; six lines in total.
+        let mut w = RotatingWriter::open(&live, policy(26, 2)).unwrap();
         for i in 0..6 {
             w.write_all(format!("line {i} xxxxx\n").as_bytes()).unwrap();
         }
@@ -225,7 +226,7 @@ mod tests {
         let gen2 = fs::read_to_string(rotated_name(&live, 2)).unwrap();
         assert!(!rotated_name(&live, 3).exists());
         for text in [&live_text, &gen1, &gen2] {
-            assert!(text.len() <= 27, "{text:?} exceeds the limit");
+            assert!(text.len() <= 26, "{text:?} exceeds the limit");
             assert_eq!(text.lines().count(), 2, "{text:?}");
             assert!(
                 text.ends_with('\n'),
@@ -237,6 +238,83 @@ mod tests {
         assert_eq!(all.lines().count(), 6);
         assert!(all.starts_with("line 0"));
         assert!(all.ends_with("line 5 xxxxx\n"));
+    }
+
+    /// A single write larger than the limit into an empty file goes into that file: rotating
+    /// first would only leave an empty generation behind.
+    #[test]
+    fn writer_never_rotates_an_empty_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("agent.log");
+        let mut w = RotatingWriter::open(&live, policy(10, 2)).unwrap();
+        w.write_all(b"a line well past the ten-byte limit\n")
+            .unwrap();
+        assert!(!rotated_name(&live, 1).exists());
+        assert_eq!(fs::metadata(&live).unwrap().len(), 36);
+    }
+
+    /// Only "not found" is tolerated when deleting: a path that cannot be removed for any
+    /// other reason (here a directory) is an error, with keep = 0 and for the oldest
+    /// generation alike.
+    #[test]
+    fn deletion_errors_other_than_not_found_are_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("agent.log");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("inner"), "x").unwrap();
+        assert!(
+            rotate(&dir, 0).is_err(),
+            "removing a directory as a file must fail"
+        );
+        rotate(&tmp.path().join("absent.log"), 0).unwrap();
+
+        let live = tmp.path().join("child.log");
+        fs::write(&live, "live").unwrap();
+        let oldest = rotated_name(&live, 1);
+        fs::create_dir(&oldest).unwrap();
+        fs::write(oldest.join("inner"), "x").unwrap();
+        assert!(
+            rotate(&live, 1).is_err(),
+            "the oldest generation is an unremovable directory"
+        );
+        assert!(
+            live.exists(),
+            "a failed rotation leaves the live file where it was"
+        );
+    }
+
+    /// Renaming the live file can fail for reasons other than its absence; those must
+    /// surface. A directory without write permission refuses the rename (root ignores
+    /// permission bits, so the test is skipped there).
+    #[cfg(unix)]
+    #[test]
+    fn rename_errors_other_than_not_found_are_reported() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipped: running as root");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("agent.log");
+        fs::write(&live, "live").unwrap();
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let result = rotate(&live, 1);
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            result.is_err(),
+            "rename inside a read-only directory must fail"
+        );
+    }
+
+    /// A size check that fails for a reason other than "not found" (here a path below a
+    /// regular file) is an error, not "nothing to rotate".
+    #[test]
+    fn size_check_errors_other_than_not_found_are_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("file");
+        fs::write(&file, "x").unwrap();
+        assert!(rotate_if_large(&file.join("child.log"), &policy(10, 1)).is_err());
     }
 
     #[test]
