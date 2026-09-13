@@ -331,6 +331,41 @@ flamingo-agent.exe imports: kernel32.dll, advapi32.dll, ole32.dll, shell32.dll, 
 logger-child.exe imports: KERNEL32.dll, ADVAPI32.dll
 ```
 
+The blocks that follow come from run
+[34746367403](https://github.com/VictoriousAttitude/flamingo-agent/actions/runs/34746367403)
+(commit `7233276`), which added the checks they document to the same job.
+
+**11. A hard-killed agent takes its child with it**
+
+The agent runs a 10 s sleep fixture as its child, is killed with `Stop-Process -Force`
+(no handler runs), and the job object's kill-on-close terminates the child within the 3 s the
+step allows:
+
+```
+fixture ping processes before the kill: 1
+fixture ping processes after the kill: 0
+```
+
+**12. Pre-planted log locations are refused**
+
+A standard user creates a directory and a junction (which needs no privilege) where the log
+directory is expected; the elevated agent pointed at each refuses to use it and exits 1
+without changing anything:
+
+```
+[C:\Users\Public\planted-logs] exit 1: flamingo-agent: securing log directory C:\Users\Public\planted-logs: C:\Users\Public\planted-logs is owned by an account other than Administrators or SYSTEM; refusing to use it
+[C:\Users\Public\planted-link] exit 1: flamingo-agent: securing log directory C:\Users\Public\planted-link: C:\Users\Public\planted-link is a reparse point (junction or symbolic link); refusing to use it
+```
+
+**13. Recovery configuration — `sc.exe qfailure FlamingoAgent`**
+
+```
+        RESET_PERIOD (in seconds)    : 86400
+        FAILURE_ACTIONS              : RESTART -- Delay = 5000 milliseconds.
+                                       RESTART -- Delay = 5000 milliseconds.
+FAILURE_ACTIONS_ON_NONCRASH_FAILURES:  TRUE
+```
+
 **Not executed (needs a human at the machine):**
 
 - Clicking Accept on the UAC consent dialog. The decline path is exercised in block 8; the
