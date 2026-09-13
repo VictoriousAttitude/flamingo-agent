@@ -88,7 +88,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch
         with:
           toolchain: 1.98.1
-          components: clippy
+          components: clippy, llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: agent-rust
@@ -96,6 +96,19 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2
+        with:
+          tool: cargo-llvm-cov
+      # The Windows-only code (DACLs, job objects, elevation, the SCM wrapper) is invisible to
+      # the Linux figure; this one measures it on the platform that ships.
+      - name: Coverage (lcov)
+        run: cargo llvm-cov --all-targets --lcov --output-path lcov-windows.info
+      - name: Coverage (line)
+        run: cargo llvm-cov report --summary-only
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-lcov-windows
+          path: agent-rust/lcov-windows.info
       - name: Configure logger-child
         working-directory: ${{ github.workspace }}
         run: cmake -S logger-child -B logger-child/build -A x64
