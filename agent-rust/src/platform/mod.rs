@@ -37,6 +37,12 @@ pub enum PlatformError {
         /// Why it was refused.
         reason: &'static str,
     },
+    /// Another agent already holds the instance lock for this log directory.
+    #[error("another agent instance already holds the lock at {path}")]
+    AlreadyRunning {
+        /// The lock file that is held.
+        path: String,
+    },
     /// The operation has no implementation on this platform.
     #[error("{0} is not supported on this platform")]
     Unsupported(&'static str),

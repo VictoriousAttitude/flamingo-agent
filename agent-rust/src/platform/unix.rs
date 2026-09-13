@@ -126,6 +126,40 @@ pub fn secure_file(path: &Path) -> Result<(), PlatformError> {
     chown_root_if_privileged(path)
 }
 
+/// Holds the instance lock for the process lifetime; the kernel releases it when the file
+/// is closed, including when the process dies without unwinding.
+#[derive(Debug)]
+pub struct InstanceLock {
+    _file: std::fs::File,
+}
+
+/// Take an exclusive, non-blocking advisory lock on `<log_dir>/agent.lock`, so two agents can
+/// never write the same logs at once. A second instance gets `AlreadyRunning` immediately.
+pub fn acquire_instance_lock(log_dir: &Path) -> Result<InstanceLock, PlatformError> {
+    use std::os::fd::AsRawFd;
+    let path = log_dir.join("agent.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .mode(FILE_MODE)
+        .open(&path)
+        .map_err(|e| PlatformError::io("opening the instance lock", e))?;
+    // SAFETY: `file` is an open descriptor for the duration of the call; flock has no other
+    // preconditions.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let err = std::io::Error::last_os_error();
+        return if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            Err(PlatformError::AlreadyRunning {
+                path: path.display().to_string(),
+            })
+        } else {
+            Err(PlatformError::io("locking the instance lock", err))
+        };
+    }
+    Ok(InstanceLock { _file: file })
+}
+
 /// Human-readable protection summary, e.g. `mode=0600 uid=0 gid=0`.
 pub fn describe_protection(path: &Path) -> Result<String, PlatformError> {
     let meta = fs::metadata(path).map_err(|e| PlatformError::io("reading file metadata", e))?;
@@ -150,6 +184,21 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Two agents on the same log directory would interleave their writes; the second one
+    /// must be refused while the first holds the lock, and admitted once it is gone.
+    #[test]
+    fn second_instance_on_the_same_directory_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = acquire_instance_lock(tmp.path()).unwrap();
+        let second = acquire_instance_lock(tmp.path());
+        assert!(
+            matches!(second, Err(PlatformError::AlreadyRunning { .. })),
+            "{second:?}"
+        );
+        drop(first);
+        acquire_instance_lock(tmp.path()).expect("lock is free once the holder is gone");
+    }
 
     /// A planted symbolic link must be refused, not followed: with root's privileges the
     /// agent would otherwise lock and write wherever the planter pointed it.

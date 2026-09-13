@@ -11,7 +11,9 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, GENERIC_WRITE, HANDLE,
     INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::Foundation::{ERROR_ACCESS_DISABLED_BY_POLICY, ERROR_CANCELLED};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DISABLED_BY_POLICY, ERROR_CANCELLED, ERROR_SHARING_VIOLATION,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,
@@ -323,6 +325,61 @@ fn apply_dacl(path: &Path, descriptor: &SecurityDescriptor) -> Result<(), Platfo
     Ok(())
 }
 
+/// Holds the instance lock for the process lifetime; the kernel closes the handle when the
+/// process dies for any reason, which releases the lock.
+#[derive(Debug)]
+pub struct InstanceLock {
+    handle: HANDLE,
+}
+
+// SAFETY: a file handle is a reference to a kernel object and may be used from any thread.
+unsafe impl Send for InstanceLock {}
+// SAFETY: as above; the only operation ever performed through it is `CloseHandle` in `Drop`.
+unsafe impl Sync for InstanceLock {}
+
+impl Drop for InstanceLock {
+    fn drop(&mut self) {
+        // SAFETY: `handle` is valid and owned by this value; closed exactly once.
+        unsafe { CloseHandle(self.handle) };
+    }
+}
+
+/// Open `<log_dir>/agent.lock` with no sharing, so a second open fails with
+/// `ERROR_SHARING_VIOLATION` for as long as this handle is held: two agents can never write
+/// the same logs at once. The file inherits the locked directory's DACL.
+pub fn acquire_instance_lock(log_dir: &Path) -> Result<InstanceLock, PlatformError> {
+    let path = log_dir.join("agent.lock");
+    let name = wide(path.as_os_str());
+    // SAFETY: `name` is NUL-terminated; a zero share mode and null security attributes are
+    // valid arguments; the handle is checked before use.
+    let handle = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            GENERIC_WRITE,
+            0,
+            ptr::null(),
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        // SAFETY: GetLastError has no preconditions.
+        let code = unsafe { GetLastError() };
+        return if code == ERROR_SHARING_VIOLATION {
+            Err(PlatformError::AlreadyRunning {
+                path: path.display().to_string(),
+            })
+        } else {
+            Err(PlatformError::Os {
+                call: "CreateFileW (instance lock)",
+                code,
+            })
+        };
+    }
+    Ok(InstanceLock { handle })
+}
+
 /// The effective DACL as an SDDL string, e.g. `D:P(A;;FA;;;BA)(A;;FA;;;SY)` (Windows may
 /// render the flags as `PAI`).
 pub fn describe_protection(path: &Path) -> Result<String, PlatformError> {
@@ -538,6 +595,21 @@ pub fn relaunch_privileged(args: &[OsString]) -> Result<i32, PlatformError> {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Two agents on the same log directory would interleave their writes; the second one
+    /// must be refused while the first holds the lock, and admitted once it is gone.
+    #[test]
+    fn second_instance_on_the_same_directory_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = acquire_instance_lock(tmp.path()).unwrap();
+        let second = acquire_instance_lock(tmp.path());
+        assert!(
+            matches!(second, Err(PlatformError::AlreadyRunning { .. })),
+            "{second:?}"
+        );
+        drop(first);
+        acquire_instance_lock(tmp.path()).expect("lock is free once the holder is gone");
+    }
 
     /// A planted junction must be refused, not followed: as SYSTEM the agent would otherwise
     /// lock and write wherever the planter pointed it. Junctions need no privilege to create.

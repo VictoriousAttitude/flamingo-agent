@@ -23,6 +23,8 @@ pub const EXIT_USAGE: u8 = 2;
 pub const EXIT_PRIVILEGE: u8 = 3;
 /// The requested operation has no implementation on this platform.
 pub const EXIT_UNSUPPORTED: u8 = 4;
+/// Another agent instance already owns the log directory.
+pub const EXIT_ALREADY_RUNNING: u8 = 5;
 
 /// CLI plus platform defaults.
 pub fn resolve_config(cli: &Cli) -> anyhow::Result<Config> {
@@ -48,6 +50,10 @@ pub fn run_agent_blocking(
 
     platform::secure_dir(&cfg.log_dir)
         .with_context(|| format!("securing log directory {}", cfg.log_dir.display()))?;
+    // Taken before the file logger opens, so a second instance never writes a line into the
+    // first one's logs. Held until the end of this function, that is for the whole run.
+    let _instance =
+        platform::acquire_instance_lock(&cfg.log_dir).context("acquiring the instance lock")?;
     let _log_guard = logging::init(&cfg.agent_log, &cfg.log_level, interactive)
         .context("initialising logging")?;
     install_panic_hook();
@@ -176,7 +182,14 @@ pub fn run_interactive(cli: &Cli) -> u8 {
         Ok(()) => EXIT_OK,
         Err(err) => {
             eprintln!("flamingo-agent: {err:#}");
-            EXIT_FAILURE
+            if matches!(
+                err.downcast_ref::<PlatformError>(),
+                Some(PlatformError::AlreadyRunning { .. })
+            ) {
+                EXIT_ALREADY_RUNNING
+            } else {
+                EXIT_FAILURE
+            }
         }
     }
 }
