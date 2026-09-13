@@ -37,6 +37,9 @@ jobs:
           cmake --build logger-child/build
       # Period 2 s (child timeout 1 s) gives thirty cycles a minute; the agent runs as root,
       # as it would in production, and is stopped with SIGINT like a Ctrl-C.
+      # Resident memory is checked from the agent's own log; open file descriptors and
+      # threads are sampled here after a minute of warm-up and again at the end, because a
+      # descriptor or thread leak would not show up in RSS for a long time.
       - name: Run the agent for ${{ inputs.minutes }} minutes
         run: |
           LOGS="$RUNNER_TEMP/soak-logs"
@@ -45,7 +48,15 @@ jobs:
             --child-path "$PWD/logger-child/build/logger-child" \
             --period-secs 2 --child-timeout-secs 1 \
             > "$RUNNER_TEMP/agent-stderr.txt" 2>&1 &
-          sleep "$(( ${{ inputs.minutes }} * 60 ))"
+          sleep 60
+          PID=$(pgrep -x flamingo-agent | head -1)
+          FDS_EARLY=$(sudo ls /proc/$PID/fd | wc -l); THREADS_EARLY=$(sudo ls /proc/$PID/task | wc -l)
+          echo "after 1 min: fds=$FDS_EARLY threads=$THREADS_EARLY"
+          sleep "$(( ${{ inputs.minutes }} * 60 - 60 ))"
+          FDS_LATE=$(sudo ls /proc/$PID/fd | wc -l); THREADS_LATE=$(sudo ls /proc/$PID/task | wc -l)
+          echo "at the end: fds=$FDS_LATE threads=$THREADS_LATE"
+          if [ $(( FDS_LATE - FDS_EARLY )) -gt 8 ]; then echo "file descriptors grew by $(( FDS_LATE - FDS_EARLY ))"; exit 1; fi
+          if [ $(( THREADS_LATE - THREADS_EARLY )) -gt 4 ]; then echo "threads grew by $(( THREADS_LATE - THREADS_EARLY ))"; exit 1; fi
           sudo pkill -INT -x flamingo-agent
           for _ in $(seq 1 30); do pgrep -x flamingo-agent > /dev/null || break; sleep 1; done
           if pgrep -x flamingo-agent; then echo "agent did not stop"; exit 1; fi
@@ -80,10 +91,21 @@ jobs:
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File .\install.ps1
       # The service runs at its registered cadence (5 s); the run is bounded by the input.
+      # Kernel handles and threads of the service process are sampled after a minute of
+      # warm-up and at the end; a handle leak would not show up in the working set.
       - name: Let the service run for ${{ inputs.minutes }} minutes
         shell: pwsh
         run: |
-          Start-Sleep -Seconds ([int]"${{ inputs.minutes }}" * 60)
+          Start-Sleep -Seconds 60
+          $p = Get-Process flamingo-agent
+          $early = @{ handles = $p.HandleCount; threads = $p.Threads.Count }
+          Write-Host "after 1 min: handles=$($early.handles) threads=$($early.threads)"
+          Start-Sleep -Seconds ([int]"${{ inputs.minutes }}" * 60 - 60)
+          $p = Get-Process flamingo-agent
+          $late = @{ handles = $p.HandleCount; threads = $p.Threads.Count }
+          Write-Host "at the end: handles=$($late.handles) threads=$($late.threads)"
+          if ($late.handles - $early.handles -gt 30) { throw "handles grew by $($late.handles - $early.handles)" }
+          if ($late.threads - $early.threads -gt 4) { throw "threads grew by $($late.threads - $early.threads)" }
           $q = sc.exe query FlamingoAgent | Out-String
           Write-Host $q
           if ($q -notmatch 'RUNNING') { throw "service is not RUNNING after the soak: $q" }
